@@ -1,0 +1,2411 @@
+:PROPERTIES:
+:header-args: :tangle no :results silent :padline no :comments link
+:END:
+#+TITLE: 加拉特隆
+#+STARTUP: overview
+#+PROPERTY: header-args:emacs-lisp :lexical yes :comments no
+
+#+BEGIN_SRC emacs-lisp :tangle galactron.el :noweb yes
+<<package-header>>
+#+END_SRC
+
+终止所有纷争，重塑整个世界。
+
+#+BEGIN_SRC emacs-lisp :tangle galactron.el :comments org
+;;; Code:
+#+END_SRC
+
+* 安装
+:PROPERTIES:
+:VISIBILITY: children
+:END:
+
+在下面这个代码块，按 ~C-c C-c~ 即可安装。需要重启Emacs才会生效
+
+#+BEGIN_SRC emacs-lisp
+(let (org-confirm-babel-evaluate) (org-babel-tangle))
+(package-install-file (file-name-directory buffer-file-name))
+(let ((dirname (package-desc-dir
+                (car (assoc-default 'galactron package-alist)))))
+  (copy-file "epdfinfo" (file-name-concat dirname "epdfinfo") t))
+(restart-emacs)
+#+END_SRC
+
+** 停用[[elisp:(customize-group 'galactron)][Galactron]]设置
+:PROPERTIES:
+:header-args:emacs-lisp: :tangle galactron.el :comments link
+:END:
+
+所有Galactron自带的设置都可以在Custom里关闭
+
+#+BEGIN_SRC emacs-lisp
+;;;###autoload(defgroup galactron nil "在启动时用Galactron配置Emacs" :tag "Galactron" :prefix "galactron-" :group 'emacs)
+#+END_SRC
+
+也可以一次[[elisp:(customize-group 'galactron-group)][停用一组设置]]，这样直接就不加载那个文件了。
+
+#+BEGIN_SRC emacs-lisp
+;;;###autoload(defgroup galactron-group nil "启用或停用一组Galactron设置" :prefix "galactron-group-" :group 'galactron)
+#+END_SRC
+
+** Org配置文件
+
+建议在所有Org配置文件一开始就加上
+
+#+BEGIN_SRC org
+,#+PROPERTY: header-args:emacs-lisp :lexical yes :results silent
+
+,#+BEGIN_SRC emacs-lisp
+;;; -*- lexical-binding: t; -*-
+,#+END_SRC
+#+END_SRC
+
+*** dotemacs.org
+
+建议在Org目录下放一下dotemacs.org，把这个文件的路径加到[[help:galactron-init-files][galactron-init-files]]，其他所有文件，比如Capture Target和Agenda File都在这里面用[[help:galactron-load-file][galactron-load-file]]加载。
+
+#+BEGIN_SRC org
+,#+BEGIN_SRC emacs-lisp :var directory-name=(file-name-directory (buffer-file-name))
+(galactron-default org-directory directory-name)
+(galactron-load-file "my-config.org")
+,#+END_SRC
+#+END_SRC
+
+*** Capture Target
+
+如果一个文件中包含了Capture Target，可以在顶上写上。若设置了[[help:galactron-orb-enabled-capture][galactron-orb-enabled-capture]]，不用写。
+
+#+BEGIN_SRC org
+,#+BEGIN_SRC emacs-lisp :var targets=(galactron-capture-collect-targets)
+(galactron-capture-define-targets targets)
+,#+END_SRC
+#+END_SRC
+
+| 类型     | PROPERTY     |
+|----------+--------------|
+| 随手记   | CAPTURE_NOTE |
+| 任务     | CAPTURE_TODO |
+| 网页剪辑 | CAPTURE_CLIP |
+
+比如，下面这样，可以在[[help:galactron-capture-note][galactron-capture-note]]时，输入til把目标选为这个heading
+
+#+BEGIN_SRC org
+:PROPERTIES:
+:CAPTURE_NOTE: til
+:END:
+#+END_SRC
+
+要分日期capture，可以写上 ~:CAPTURE_TARGET:~
+
+#+BEGIN_SRC org
+:PROPERTIES:
+:CAPTURE_TARGET: til-%Y%m.org
+:END:
+#+END_SRC
+
+要想在提示最前面加几个字符可以用 ~:CAPTURE_TITLE:~
+
+#+BEGIN_SRC org
+:PROPERTIES:
+:CAPTURE_TITLE: 直到我膝盖中了一箭
+:END:
+#+END_SRC
+
+*** Agenda File
+
+要把一个Org文件加到[[elisp:(customize-option 'org-agenda-files)][org-agenda-files]]，可以直接在里面写。若设置了[[help:galactron-orb-enabled-capture][galactron-orb-enabled-capture]]，所有包含了 ~CAPTURE_TODO~ 的文件不用加。
+
+#+BEGIN_SRC org
+,#+BEGIN_SRC emacs-lisp
+(galactron-agenda-add)
+,#+END_SRC
+#+END_SRC
+
+** XDG Desktop
+
+*** emacs-client
+
+#+BEGIN_SRC emacs-lisp :tangle no
+(let* ((commands (list "./xdg-util.py" "emacsclient"
+                       (getenv "GIO_LAUNCHED_DESKTOP_FILE")))
+       (cmds
+        (if (equal (getenv "container") "flatpak")
+            (append
+             '("flatpak-spawn" "--host" "--watch-bus" "--")
+             commands)
+          commands))
+       (cmd (car cmds))
+       (args (cdr cmds)))
+  (with-temp-buffer
+    (let ((status (apply 'call-process cmd nil t nil args)))
+      (if (zerop status)
+          (message "\nOK\n%s" (buffer-string))
+        (message "Error %s\n%s" status (buffer-string))))))
+#+END_SRC
+
+*** org-protocol
+
+网页剪辑功能需要添加org-protocol
+
+#+BEGIN_SRC emacs-lisp :tangle no
+(let* ((commands (list "./xdg-util.py" "org-protocol"
+                       (getenv "GIO_LAUNCHED_DESKTOP_FILE")))
+       (cmds
+        (if (equal (getenv "container") "flatpak")
+            (append
+             '("flatpak-spawn" "--host" "--watch-bus" "--")
+             commands)
+          commands))
+       (cmd (car cmds))
+       (args (cdr cmds)))
+  (with-temp-buffer
+    (let ((status (apply 'call-process cmd nil t nil args)))
+      (if (zerop status)
+          (message "\nOK\n%s" (buffer-string))
+        (message "Error %s\n%s" status (buffer-string))))))
+#+END_SRC
+
+** 添加浏览器书签
+
+网页剪辑功能需要在浏览器里加一个书签
+
+#+BEGIN_EXAMPLE
+javascript:location.href='org-protocol://capture?'+new URLSearchParams({url:location.href,title:document.title,body:Array.from({length:getSelection().rangeCount},(_,i)=>new XMLSerializer().serializeToString(getSelection().getRangeAt(i).cloneContents())).join()})
+#+END_EXAMPLE
+
+* Galactron自带设置
+:PROPERTIES:
+:VISIBILITY: content
+:END:
+** 调整默认设置
+:PROPERTIES:
+:VISIBILITY: content
+:END:
+*** [[elisp:(customize-group 'galactron-server)][Server]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-server.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="server",desc="修改Server设置")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(require 'server)
+(unless (server-running-p)
+  (server-start))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-package)][Package]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-package.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="package",desc="修改Package Archive设置")>>
+#+END_SRC
+
+**** [[help:galactron-package-enabled-melpa][MELPA]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-package-enabled-melpa t
+  "MELPA
+
+- MELPA官方 Milkypostman's Emacs Lisp Package Archive
+  https://melpa.org
+
+- TUNA镜像 清华大学开源软件镜像站
+  https://mirrors.tuna.tsinghua.edu.cn/help/elpa/
+
+- SJTUG镜像 上海交通大学SJTUG软件源镜像服务
+  https://mirrors.sjtug.sjtu.edu.cn/docs/emacs-elpa
+"
+  :type
+  '(choice
+    (const :tag "MELPA官方" t)
+    (const :tag "TUNA镜像" tuna)
+    (const :tag "SJTUG镜像" sjtug)
+    (const :tag "禁用" nil))
+  :tag "MELPA")
+
+(when galactron-package-enabled-melpa
+  (galactron-default-assoc
+   package-archives
+   "melpa"
+   (pcase galactron-package-enabled-melpa
+     ('tuna "http://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")
+     ('sjtug "https://mirrors.sjtug.sjtu.edu.cn/emacs-elpa/melpa/")
+     (_ "https://melpa.org/packages/"))))
+#+END_SRC
+
+**** [[help:galactron-package-enabled-hxb][我的美尔巴]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-package-enabled-hxb t
+  "我的美尔巴 https://github.com/hxb2012/melpa/"
+  :type 'boolean
+  :tag "我的美尔巴")
+
+(when galactron-package-enabled-hxb
+  (galactron-default-assoc package-archives
+                        "hxb" "https://hxb2012.github.io/melpa/")
+  (galactron-default-assoc package-archive-priorities "hxb" 1))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-display)][显示]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-display.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="display",desc="修改显示设置")>>
+#+END_SRC
+
+**** [[help:galactron-display-enabled-glyphless][不可见字符]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-glyphless t
+  "不可见字符"
+  :type 'boolean
+  :tag "Glyphless")
+
+(defun galactron-display--enable-glyphless-h ()
+  (glyphless-display-mode t))
+
+(when galactron-display-enabled-glyphless
+  (dolist (hook
+           '(ert-simple-view-mode-hook
+             ert-results-mode-hook
+             messages-buffer-mode-hook
+             text-mode-hook
+             prog-mode-hook))
+    (add-hook hook 'galactron-display--enable-glyphless-h)))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-whitespace][高亮显示空白]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-whitespace t
+  "高亮显示空白"
+  :type 'boolean
+  :tag "Whitespace")
+
+(defun galactron-display--enable-whitespace-h ()
+  (whitespace-mode t))
+
+(when galactron-display-enabled-whitespace
+  (galactron-default whitespace-style
+                  '(face tabs trailing indentation tab-mark))
+  (dolist (hook
+           '(text-mode-hook
+             prog-mode-hook))
+    (add-hook hook 'galactron-display--enable-whitespace-h)))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-line-number][行号]]
+
+~global-linum-mode~ 和 ~pdf-tools~ 冲突，参考[[https://github.com/politza/pdf-tools/issues/308#issuecomment-328217608][pdf-tools #308下的评论]]
+
+Emacs 29参考[[https://emacs.stackexchange.com/a/78370][What to use instead of linum-mode in Emacs 29?]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-line-number t
+  "行号"
+  :type 'boolean
+  :tag "Line number")
+
+(defun galactron-display--enable-line-number-h ()
+  (if (< emacs-major-version 29)
+      (linum-mode t)
+    (display-line-numbers-mode t)))
+
+(when galactron-display-enabled-line-number
+  (dolist (hook
+           '(prog-mode-hook))
+    (add-hook hook 'galactron-display--enable-line-number-h)))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-word-wrap-by-category][中文折行]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-word-wrap-by-category t
+  "中文折行"
+  :type 'boolean
+  :tag "Word wrap by category")
+
+(when galactron-display-enabled-word-wrap-by-category
+  (galactron-default word-wrap-by-category t))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-visual-fill-column][按Fill Column折行]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-visual-fill-column t
+  "按Fill Column折行"
+  :type 'boolean
+  :tag "Visual fill column")
+
+(when galactron-display-enabled-visual-fill-column
+  (galactron-with-package-installed visual-fill-column
+    (add-hook 'visual-line-mode-hook #'visual-fill-column-mode)
+    (advice-add 'text-scale-adjust :after #'visual-fill-column-adjust)
+    (galactron-default visual-fill-column-center-text t)
+    (galactron-default
+     visual-fill-column-enable-sensible-window-split t)
+    (galactron-default visual-line-fringe-indicators '(nil  t))
+    (galactron-default
+     visual-fill-column-fringes-outside-margins nil)))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-font-setup][中英文字符等宽]] (仅支持Flatpak)
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-font-setup t
+  "中英文字符等宽"
+  :type 'boolean
+  :tag "Font setup")
+
+(defun galactron-display--font-setup-h ()
+  (add-to-list 'face-font-rescale-alist '("Noto" . 1.2))
+  (add-to-list 'face-font-rescale-alist '("Symbola" . 1.2))
+  (set-fontset-font t 'symbol "Noto Sans CJK SC")
+  (set-fontset-font t 'symbol "Symbola" nil 'append)
+  (set-fontset-font t 'symbol "Noto Color Emoji" nil 'append)
+  (set-fontset-font t 'emoji "Noto Sans CJK SC")
+  (set-fontset-font t 'emoji "Symbola" nil 'append)
+  (set-fontset-font t 'emoji "Noto Color Emoji" nil 'append))
+
+(when (equal (getenv "container") "flatpak")
+  (when galactron-display-enabled-font-setup
+    (add-hook 'window-setup-hook 'galactron-display--font-setup-h)))
+#+END_SRC
+
+修正俄语字符和拼音中的非英文字符宽度
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron-display--set-char-width (alist)
+  (let ((table (make-char-table nil)))
+    (dolist (pair alist)
+      (set-char-table-range table (car pair) (cdr pair)))
+    (optimize-char-table table)
+    (set-char-table-parent table char-width-table)
+    (setq char-width-table table)))
+
+(when galactron-display-enabled-font-setup
+  (galactron-display--set-char-width
+   '(((?Ё . ?ё) . 1)
+     (?№ . 1)
+     (?ü . 1)
+     (?‘ . 1)
+     (?’ . 1)
+     (?“ . 1)
+     (?” . 1)
+     (?’ . 1))))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-imenu][IMenu]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-imenu t
+  "Imenu"
+  :type 'boolean
+  :tag "Imenu")
+
+(defun galactron-display--enable-imenu-h ()
+  (ignore-errors
+    (imenu-add-to-menubar "Imenu")))
+
+(when galactron-display-enabled-imenu
+  (dolist (hook
+           '(font-lock-mode-hook))
+    (add-hook hook 'galactron-display--enable-imenu-h)))
+#+END_SRC
+
+**** [[help:galactron-display-enabled-shortcut-menu][快捷菜单]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-shortcut.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-display.el
+(defcustom galactron-display-enabled-shortcut-menu t
+  "快捷菜单"
+  :type 'boolean
+  :tag "Shortcut Menu")
+
+(when galactron-display-enabled-shortcut-menu
+  (require 'galactron-shortcut)
+  (keymap-set
+   (keymap-lookup (current-global-map) "<menu-bar>")
+   "<galactron-shortcut-menu>"
+   (cons "快捷菜单" galactron-shortcut-menu))
+  (add-to-list 'menu-bar-final-items
+               'galactron-shortcut-menu 'append))
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<header(name="galactron-shortcut",desc="快捷菜单")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(defvar galactron-shortcut-menu
+  (make-sparse-keymap "Galactron Shortcut"))
+
+;;;###autoload
+(defun galactron-shortcut-add-item (key name binding &rest plist)
+  (funcall
+   (if (keymap-lookup galactron-shortcut-menu key)
+       'keymap-set
+     'keymap-set-after)
+   galactron-shortcut-menu
+   key
+   (apply 'list 'menu-item name binding plist)))
+
+;;;###autoload
+(defun galactron-shortcut-add-separator (key)
+  (galactron-shortcut-add-item key
+                            "--" 'ignore
+                            :enable nil))
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<footer(name="galactron-shortcut")>>
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-edit)][编辑]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-edit.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="edit",desc="修改编辑设置")>>
+#+END_SRC
+
+**** [[help:galactron-edit-enabled-no-electric-indent][禁用回车自动缩进]]
+
+设置回车自动缩进为关闭。因为手指太短，够不着回车键。关闭回车自动缩进后， ~C-j~ 就自动缩进了。
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-edit-enabled-no-electric-indent t
+  "禁用回车自动缩进"
+  :type 'boolean
+  :tag "No electric indent")
+
+(when galactron-edit-enabled-no-electric-indent
+  (galactron-default electric-indent-mode nil))
+#+END_SRC
+
+**** [[help:galactron-edit-enabled-delete-selection][输入覆盖选中区域]]
+
+Emacs默认选中一个区域后，输入并不会覆盖内容
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-edit-enabled-delete-selection t
+  "输入覆盖选中区域"
+  :type 'boolean
+  :tag "Delete selection")
+
+(when galactron-edit-enabled-delete-selection
+  (galactron-default delete-selection-mode t))
+#+END_SRC
+
+**** [[help:galactron-edit-enabled-no-indent-tabs][禁用Tab缩进]]
+
+设置使用Tab缩进为禁止。
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-edit-enabled-no-indent-tabs t
+  "禁用Tab缩进"
+  :type 'boolean
+  :tag "No indent tabs")
+#+END_SRC
+
+因为Makefile需要Tab，需要在进入Makefile前，强制打开
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron-edit--enable-indent-tabs-mode-h ()
+  (indent-tabs-mode t))
+
+(when galactron-edit-enabled-no-indent-tabs
+  (galactron-default indent-tabs-mode nil)
+  (add-hook 'makefile-mode-hook
+            'galactron-edit--enable-indent-tabs-mode-h))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-frame)][Frame]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-frame.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="frame",desc="修改Frame设置")>>
+#+END_SRC
+
+**** [[help:galactron-frame-enabled-no-menu-bar][禁用菜单栏]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-no-menu-bar nil
+  "禁用菜单栏"
+  :type 'boolean
+  :tag "No menu bar")
+
+(when galactron-frame-enabled-no-menu-bar
+  (unless (galactron--variable-saved-p 'menu-bar-mode)
+    (put 'menu-bar-mode 'customized-value '(nil))))
+#+END_SRC
+
+**** [[help:galactron-frame-enabled-no-tool-bar][禁用工具栏]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-no-tool-bar t
+  "禁用工具栏"
+  :type 'boolean
+  :tag "No tool bar")
+
+(when galactron-frame-enabled-no-tool-bar
+  (unless (galactron--variable-saved-p 'tool-bar-mode)
+    (put 'tool-bar-mode 'customized-value '(nil))))
+#+END_SRC
+
+**** [[help:galactron-frame-enabled-borderless][禁用边框]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-borderless t
+  "禁用边框"
+  :type 'boolean
+  :tag "Borderless")
+
+(when (and galactron-frame-enabled-borderless (display-graphic-p))
+  (galactron-default-assoc default-frame-alist 'undecorated t))
+#+END_SRC
+
+**** [[help:galactron-frame-enabled-maximized][最大化]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-maximized t
+  "最大化"
+  :type 'boolean
+  :tag "Maximized")
+
+(when (and galactron-frame-enabled-maximized (display-graphic-p))
+  (galactron-default-assoc default-frame-alist
+                           'fullscreen 'maximized))
+#+END_SRC
+
+**** [[help:galactron-frame-enabled-minibuffer-at-top][把minibuffer放到顶部]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-minibuffer-at-top nil
+  "把minibuffer放到顶部"
+  :type 'boolean
+  :tag "Minibuffer at top")
+#+END_SRC
+
+Emacs并不能把Frame放到顶上，只能把minibuffer弄到Child Frame里。但是焦点会出问题，比如 ~M-x customize-group emacs RET~ 之后焦点就跑回去了。只能在[[help:read-from-minibuffer][read-from-minibuffer]]之前多等一会儿，等焦点先跑回去再开始，这样就不会出错了。
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron-frame--delay-read-from-minibuffer-a (&rest _rest)
+  (redisplay t)
+  (read-char "" nil 0.02))
+#+END_SRC
+
+只能让minibuffer挡在Tab Bar上面，把minibuffer高度设置的和Tab Bar的一样，就看不出来了
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron-frame--resize-minibuffer-a (fun frame alist)
+  (let ((minibuffer (window-frame (minibuffer-window frame))))
+    (if (eq minibuffer frame)
+        (funcall fun frame alist)
+      (let* ((old-width (car (assoc-default 'outer-size
+                                            (frame-geometry frame))))
+             (result
+              (prog1
+                  (funcall fun frame alist)
+                (redisplay t)))
+             (height (tab-bar-height frame t))
+             (new-width (car (assoc-default 'outer-size
+                                            (frame-geometry frame)))))
+        (unless (equal old-width new-width)
+          (set-frame-size minibuffer new-width height t))
+        result))))
+
+(defun galactron-frame--minibuffer-at-top-h ()
+  (advice-add 'modify-frame-parameters
+              :around 'galactron-frame--resize-minibuffer-a))
+
+(defun galactron-frame--create-frame-a (fun params)
+  (let ((frame (funcall fun params)))
+    (redisplay t)
+    (if (eq 'only (frame-parameter frame 'minibuffer))
+        (let* ((parent (frame-parent frame))
+               (width (car (assoc-default 'outer-size
+                                          (frame-geometry parent))))
+               (height (tab-bar-height parent t)))
+          (set-frame-size frame width height t))
+      (unless (memq (frame-parameter frame 'fullscreen)
+                    '(maximized fullwidth))
+        (when-let ((width (assoc-default 'width params)))
+          (unless (equal width (frame-parameter frame 'width))
+            (set-frame-parameter frame 'width width))))
+      (unless (memq (frame-parameter frame 'fullscreen)
+                    '(maximized fullheight))
+        (when-let ((height (assoc-default 'height params)))
+          (unless (equal height (frame-parameter frame 'height))
+            (set-frame-parameter frame 'height height)))))
+      frame))
+#+END_SRC
+
+最后再把mode-line换到header-line上
+
+#+BEGIN_SRC emacs-lisp
+(when (and galactron-frame-enabled-minibuffer-at-top
+           (display-graphic-p))
+  (galactron-default frame-resize-pixelwise t)
+  (galactron-default header-line-format mode-line-format)
+  (galactron-default mode-line-format nil)
+  (galactron-default-assoc minibuffer-frame-alist 'height 1)
+  (galactron-default-assoc default-frame-alist
+                        'minibuffer 'child-frame)
+  (galactron-default-assoc minibuffer-frame-alist 'top 0)
+  (galactron-default-assoc minibuffer-frame-alist 'left 0)
+  (put 'tab-bar-mode 'customized-value '(t))
+  (add-hook 'window-setup-hook 'galactron-frame--minibuffer-at-top-h)
+  (advice-add 'frame-creation-function
+              :around 'galactron-frame--create-frame-a)
+  (advice-add 'read-from-minibuffer
+              :before 'galactron-frame--delay-read-from-minibuffer-a))
+#+END_SRC
+
+**** [[help:galactron-frame-enabled-transparent][透明背景]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-transparent nil
+  "透明背景
+
+数字的含义是 100 - alpha，改成100就完全看不见了"
+  :type 'natnum
+  :tag "Transparent Background")
+
+(when (and galactron-frame-enabled-transparent (display-graphic-p))
+  (galactron-default-assoc
+   default-frame-alist
+   'alpha-background (- 100 galactron-frame-enabled-transparent)))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-org)][Org-Mode]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-org.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="org",desc="修改Org Mode设置")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(defvar org-capture-entry nil)
+#+END_SRC
+
+**** [[help:galactron-org-enabled-lazy-load-modules][延迟加载模块]]
+
+Org-Mode暗藏启动速度杀手，能少一点是一点
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-lazy-load-modules t
+  "延迟加载模块"
+  :type 'boolean
+  :tag "Lazy load modules")
+
+(when galactron-org-enabled-lazy-load-modules
+  (setq org-modules-loaded t)
+  (with-eval-after-load 'org
+    (dolist (ext org-modules)
+      (pcase ext
+        ('ol-doi
+         (autoload 'org-link-doi-open "ol-doi")
+         (autoload 'org-link-doi-export "ol-doi")
+         (org-link-set-parameters
+          "doi"
+          :follow #'org-link-doi-open
+          :export #'org-link-doi-export))
+        ('ol-w3m
+         (autoload 'org-w3m-store-link "ol-w3m")
+         (org-link-set-parameters "w3m" :store #'org-w3m-store-link))
+        ('ol-bbdb
+         (autoload 'org-bbdb-open "ol-bbdb")
+         (autoload 'org-bbdb-export "ol-bbdb")
+         (autoload 'org-bbdb-complete-link "ol-bbdb")
+         (autoload 'org-bbdb-store-link "ol-bbdb")
+         (org-link-set-parameters
+          "bbdb"
+          :follow #'org-bbdb-open
+          :export #'org-bbdb-export
+          :complete #'org-bbdb-complete-link
+          :store #'org-bbdb-store-link))
+        ('ol-bibtex
+         (autoload 'org-bibtex-open "ol-bibtex")
+         (autoload 'org-bibtex-store-link "ol-bibtex")
+         (org-link-set-parameters
+          "bibtex"
+          :follow #'org-bibtex-open
+          :store #'org-bibtex-store-link))
+        ('ol-docview
+         (autoload 'org-docview-open "ol-docview")
+         (autoload 'org-docview-export "ol-docview")
+         (autoload 'org-docview-store-link "ol-docview")
+         (org-link-set-parameters
+          "docview"
+          :follow #'org-docview-open
+          :export #'org-docview-export
+          :store #'org-docview-store-link))
+        ('ol-gnus
+         (autoload 'org-gnus-open "ol-gnus")
+         (autoload 'org-gnus-store-link "ol-gnus")
+         (org-link-set-parameters
+          "gnus"
+          :follow #'org-gnus-open
+          :store #'org-gnus-store-link))
+        ('ol-info
+         (autoload 'org-info-open "ol-info")
+         (autoload 'org-info-export "ol-info")
+         (autoload 'org-info-store-link "ol-info")
+         (autoload 'org-info-description-as-command "ol-info")
+         (org-link-set-parameters
+          "info"
+          :follow #'org-info-open
+          :export #'org-info-export
+          :store #'org-info-store-link
+          :insert-description #'org-info-description-as-command))
+        ('ol-irc
+         (autoload 'org-irc-visit "ol-irc")
+         (autoload 'org-irc-store-link "ol-irc")
+         (autoload 'org-irc-export "ol-irc")
+         (org-link-set-parameters
+          "irc"
+          :follow #'org-irc-visit
+          :store #'org-irc-store-link
+          :export #'org-irc-export))
+        ('ol-mhe
+         (autoload 'org-mhe-open "ol-mhe")
+         (autoload 'org-mhe-store-link "ol-mhe")
+         (org-link-set-parameters
+          "mhe"
+          :follow #'org-mhe-open
+          :store #'org-mhe-store-link))
+        ('ol-rmail
+         (autoload 'org-rmail-open "ol-rmail")
+         (autoload 'org-rmail-store-link "ol-rmail")
+         (org-link-set-parameters
+          "rmail"
+          :follow #'org-rmail-open
+          :store #'org-rmail-store-link))
+        ('ol-eww
+         (autoload 'org-eww-open "ol-eww")
+         (autoload 'org-eww-store-link "ol-eww")
+         (org-link-set-parameters
+          "eww"
+          :follow #'org-eww-open
+          :store #'org-eww-store-link))))))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-refile-outline-path][refile路径提示]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-refile-outline-path t
+  "refile路径提示"
+  :type 'boolean
+  :tag "Refile outline path")
+
+(when galactron-org-enabled-refile-outline-path
+  (galactron-default org-refile-use-outline-path 'buffer-name)
+  (galactron-default org-outline-path-complete-in-steps nil))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-no-src-indentation][禁用代码块缩进]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-no-src-indentation t
+  "禁用代码块缩进"
+  :type 'boolean
+  :tag "No source indent")
+
+(when galactron-org-enabled-no-src-indentation
+  (galactron-default org-src-preserve-indentation t)
+  (galactron-default org-edit-src-content-indentation 0))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-visual-line][自动折行]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-visual-line t
+  "自动折行"
+  :type 'boolean
+  :tag "Visual line")
+
+(when galactron-org-enabled-visual-line
+  (add-hook 'org-mode-hook 'visual-line-mode))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-log-done-time][记录任务结束时间]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-log-done-time t
+  "记录任务结束时间"
+  :type 'boolean
+  :tag "Log done time")
+
+(when galactron-org-enabled-log-done-time
+  (galactron-default org-log-done 'time))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-todo-dependencies][任务依赖]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-todo-dependencies t
+  "记录任务结束时间"
+  :type 'boolean
+  :tag "Todo dependencies")
+
+(when galactron-org-enabled-todo-dependencies
+  (galactron-default org-enforce-todo-dependencies t))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-clock-persistence][关闭Emacs时，保持clock in]]
+
+每次退出都要提示，很烦。而且，进来之后永远选不对，不如强制保持了。为了避免出问题，当前Clock in的Buffer也不允许关闭。
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-clock-persistence t
+  "关闭Emacs时，保持clock in"
+  :type 'boolean
+  :tag "Clock persistence")
+
+(defun galactron-org--check-running-clock-h ()
+  (not (equal (marker-buffer org-clock-marker) (current-buffer))))
+
+(defun galactron-org--stop-killing-clocked-in-h ()
+  (add-hook 'kill-buffer-query-functions
+            'galactron-org--check-running-clock-h nil t))
+
+(when galactron-org-enabled-clock-persistence
+  (galactron-default org-clock-persist t)
+  (galactron-default org-clock-in-resume t)
+  (galactron-default org-clock-persist-query-resume nil)
+  (galactron-default org-clock-ask-before-exiting nil)
+  (add-hook 'org-mode-hook 'galactron-org--stop-killing-clocked-in-h)
+  (with-eval-after-load 'org
+    (org-clock-persistence-insinuate)))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-publish-timestamp-directory][Org publish时间戳目录位置]]
+
+默认放在[[help:user-emacs-directory][user-emacs-directory]]外面，容易找不到
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-publish-timestamp-directory t
+  "Org publish时间戳目录位置"
+  :type 'boolean
+  :tag "Publish timestamp directory")
+
+(when galactron-org-enabled-publish-timestamp-directory
+  (galactron-default
+   org-publish-timestamp-directory
+   (file-name-as-directory
+    (expand-file-name "org-timestamps" user-emacs-directory))))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-publish-code-highlight][Org publish代码高亮]] (请先[[elisp:(package-install 'htmlize)][安装htmlize]])
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-publish-code-highlight t
+  "Org publish代码高亮"
+  :type 'boolean
+  :tag "Publish code highlight")
+
+(when galactron-org-enabled-publish-code-highlight
+  (galactron-with-package-installed htmlize))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-remember][设置为Remember后端]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-remember t
+  "设置为Remember后端"
+  :type 'boolean
+  :tag "Remember")
+
+(defun galactron-org--remember-handler ()
+  (mark-whole-buffer)
+  (let ((org-capture-entry
+         (list
+          "r"
+          "remember"
+          'entry
+          (list 'file remember-data-file)
+          "* %i"
+          :immediate-finish t
+          :jump-to-captured nil)))
+    (org-capture)))
+
+(defun galactron-org--remember-h ()
+  (visual-fill-column-mode -1))
+
+(when galactron-org-enabled-remember
+  (galactron-default remember-data-file
+                  (expand-file-name "remember.org" org-directory))
+  (galactron-default remember-notes-initial-major-mode 'org-mode)
+  (galactron-default remember-notes-buffer-name "*remember*")
+  (galactron-default remember-handler-functions
+                  '(galactron-org--remember-handler))
+  (galactron-default remember-annotation-functions '())
+  (when galactron-display-enabled-visual-fill-column
+    (add-hook 'remember-notes-mode-hook 'galactron-org--remember-h))
+  (keymap-global-set "C-x M-r" 'remember))
+#+END_SRC
+
+**** [[help:galactron-org-enabled-sidebar][侧栏]] (请先[[elisp:(package-install 'orb)][安装orb]])
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-sidebar t
+  "侧栏"
+  :type 'boolean
+  :tag "Sidebar")
+
+(when galactron-org-enabled-sidebar
+  (galactron-with-package-installed orb
+    (with-eval-after-load 'org
+      (keymap-set org-mode-map "C-c r" 'orb-sidebar))))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-pdf)][PDF Tools]] (请先[[elisp:(package-install 'pdf-tools)][安装pdf-tools]])
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-pdf.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="pdf",desc="修改PDF Tools设置")>>
+#+END_SRC
+
+**** [[help:galactron-pdf-enabled-auto-mode][关联后缀]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-pdf-enabled-auto-mode t
+  "关联后缀"
+  :type 'boolean
+  :tag "Auto mode")
+
+(when galactron-pdf-enabled-auto-mode
+  (pdf-loader-install))
+#+END_SRC
+
+**** [[help:galactron-pdf-enabled-python-server][Python Server]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-pdf-enabled-python-server t
+  "Python Server"
+  :type 'boolean
+  :tag "Python Server")
+
+(when galactron-pdf-enabled-python-server
+  (galactron-default pdf-info-epdfinfo-program
+                  (file-name-concat
+                   (file-name-directory load-file-name) "epdfinfo")))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-nov)][Nov]] (请先[[elisp:(package-install 'nov)][安装nov]])
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-nov.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="nov",desc="修改Nov设置")>>
+#+END_SRC
+
+**** [[help:galactron-nov-enabled-auto-mode][关联后缀]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-nov-enabled-auto-mode t
+  "关联后缀"
+  :type 'boolean
+  :tag "Auto mode")
+
+(when galactron-nov-enabled-auto-mode
+  (add-to-list 'auto-mode-alist '("\\.epub\\'" . nov-mode)))
+#+END_SRC
+
+**** [[help:galactron-nov-enabled-visual-line][自动折行]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-nov-enabled-visual-line t
+  "自动折行"
+  :type 'boolean
+  :tag "Visual line")
+
+(when galactron-nov-enabled-visual-line
+  (add-hook 'nov-mode-hook 'visual-line-mode))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-largefile)][largefile]] (请先[[elisp:(package-install 'largefile)][安装largefile]])
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-largefile.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="largefile",desc="修改largefile设置")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(largefile-mode t)
+#+END_SRC
+
+**** [[help:galactron-largefile-enabled-docview][DocView]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-largefile-enabled-docview t
+  "DocView"
+  :type 'boolean
+  :tag "DocView")
+
+(when galactron-largefile-enabled-docview
+  (dolist (item auto-mode-alist)
+    (when (eq (cdr item) 'doc-view-mode-maybe)
+      (add-to-list 'largefile-mode-alist item))))
+#+END_SRC
+
+**** [[help:galactron-largefile-enabled-pdf][PDF Tools]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-largefile-enabled-pdf t
+  "PDF Tools"
+  :type 'boolean
+  :tag "PDF-Tools")
+
+(when galactron-largefile-enabled-pdf
+  (galactron-with-package-installed pdf-tools
+    (dolist (item auto-mode-alist)
+      (when (equal
+             (cdr item)
+             (let ((args (list nil nil nil nil)))
+               (lambda ()
+                 (apply #'pdf-loader--load args))))
+        (add-to-list 'largefile-mode-alist item)))))
+#+END_SRC
+
+**** [[help:galactron-largefile-enabled-nov][Nov]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-largefile-enabled-nov t
+  "Nov"
+  :type 'boolean
+  :tag "Nov")
+
+(when galactron-largefile-enabled-nov
+  (galactron-with-package-installed nov
+    (dolist (item auto-mode-alist)
+      (when (eq (cdr item) 'nov-mode)
+        (add-to-list 'largefile-mode-alist item)))))
+#+END_SRC
+
+**** [[help:galactron-largefile-enabled-djvu][Djvu]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-largefile-enabled-djvu t
+  "Djvu"
+  :type 'boolean
+  :tag "Djvu")
+
+(when galactron-largefile-enabled-djvu
+  (galactron-with-package-installed djvu
+    (dolist (item auto-mode-alist)
+      (when (eq (cdr item) 'djvu-init-mode)
+        (add-to-list 'largefile-mode-alist item)))))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-wanderlust)][Wanderlust]] (请先[[elisp:(package-install 'wanderlust)][安装wanderlust]])
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-wanderlust.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="wanderlust",desc="修改Wanderlust设置")>>
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-no-prefetch-threshold][禁用下载上限]]
+
+每次都要提示很烦
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-no-prefetch-threshold t
+  "禁用下载上限"
+  :type 'boolean
+  :tag "No prefresh threshold")
+
+(when galactron-wanderlust-enabled-no-prefetch-threshold
+  (galactron-default wl-prefetch-threshold nil))
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-accept-quoted-encoded][接受quoted编码]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-accept-quoted-encoded t
+  "接受quoted编码"
+  :type 'boolean
+  :tag "Accept quoted encoded")
+
+(when galactron-wanderlust-enabled-accept-quoted-encoded
+  (galactron-default mime-header-accept-quoted-encoded-words t))
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-file-location][文件位置]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-file-location t
+  "文件位置"
+  :type 'boolean
+  :tag "File location")
+
+(when galactron-wanderlust-enabled-file-location
+  (galactron-default wl-init-file
+                  (expand-file-name "wl/init" user-emacs-directory))
+  (galactron-default wl-folders-file
+                (expand-file-name "wl/folders" user-emacs-directory))
+  (galactron-default wl-address-file
+                (expand-file-name "wl/address" user-emacs-directory))
+  (galactron-default wl-alias-file
+                (expand-file-name "wl/alias" user-emacs-directory))
+  (galactron-default wl-temporary-file-directory
+                  (expand-file-name "wl/tmp" user-emacs-directory))
+  (galactron-default elmo-msgdb-directory
+                (expand-file-name "elmo" user-emacs-directory))
+  (galactron-default elmo-archive-folder-path
+                (expand-file-name "Mail" user-emacs-directory))
+  (galactron-default elmo-localdir-folder-path
+                (expand-file-name "Mail" user-emacs-directory))
+  (galactron-default elmo-maildir-folder-path
+                  (expand-file-name "Maildir" user-emacs-directory))
+  (galactron-default elmo-search-namazu-default-index-path
+                  (expand-file-name "Mail" user-emacs-directory)))
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-field-list][显示字段]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-field-list t
+  "显示字段"
+  :type 'boolean
+  :tag "Field list")
+
+(when galactron-wanderlust-enabled-field-list
+  (galactron-default wl-message-ignored-field-list '("^.*:"))
+  (galactron-default wl-message-visible-field-list
+                  '("^To:" "^Cc:" "^From:" "^Subject:" "^Date:"))
+  (galactron-default wl-message-sort-field-list
+                  '("^From:" "^Subject:" "^Date:" "^To:" "^Cc:")))
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-summary-line-format][Summary格式]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-summary-line-format t
+  "Summary格式"
+  :type 'boolean
+  :tag "Summary line format")
+
+(when galactron-wanderlust-enabled-summary-line-format
+  (galactron-default wl-summary-line-format
+                  "%n%T%P%Y-%M-%D(%W) %t%[%17(%c %f%) %] %s"))
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-mail-user-agent][设置为Emacs邮件User-Agent]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-mail-user-agent t
+  "设置为Emacs邮件User-Agent"
+  :type 'boolean
+  :tag "Mail user agent")
+
+(when galactron-wanderlust-enabled-mail-user-agent
+  (define-mail-user-agent
+    'wl-user-agent
+    'wl-user-agent-compose
+    'wl-draft-send
+    'wl-draft-kill
+    'mail-send-hook)
+  (galactron-default mail-user-agent 'wl-user-agent))
+#+END_SRC
+
+**** [[help:galactron-wanderlust-enabled-org-mime][发送Org Mode里编辑的邮件]] (请先[[elisp:(package-install 'org-mime)][安装org-mime]])
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-wanderlust-enabled-org-mime t
+  "发送Org Mode里编辑的邮件"
+  :type 'boolean
+  :tag "Org mime")
+
+(when galactron-wanderlust-enabled-org-mime
+  (galactron-with-package-installed org-mime
+    (galactron-default org-mime-library 'semi)))
+#+END_SRC
+
+*** [[elisp:(customize-group 'galactron-flatpak)][Flatpak]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-flatpak.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="flatpak",desc="修改Flatpak设置")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron-flatpak--executable-find (command)
+  (zerop
+   (call-process "flatpak-spawn" nil nil nil
+                 "--host" "--watch-bus" "--" "which" command)))
+
+(defvar galactron-flatpak--call-process-override-p nil)
+(defvar galactron-flatpak--start-process-override-p nil)
+
+(defun galactron-flatpak--call-process-a (fun &rest args)
+  (if galactron-flatpak--call-process-override-p
+      (apply fun args)
+    (cl-letf* ((galactron-flatpak--call-process-override-p t)
+               (call-process (symbol-function 'call-process))
+               ((symbol-function 'call-process)
+                (lambda (program &optional infile destination display &rest args)
+                  (apply call-process
+                         "flatpak-spawn"
+                         infile destination display
+                         "--host" "--watch-bus" "--"
+                         program args))))
+      (apply fun args))))
+
+(defun galactron-flatpak--start-process-a (fun &rest args)
+  (if galactron-flatpak--start-process-override-p
+      (apply fun args)
+    (cl-letf* ((galactron-flatpak--start-process-override-p t)
+               (start-process (symbol-function 'start-process))
+               ((symbol-function 'start-process)
+                (lambda (name buffer program &rest program-args)
+                  (apply start-process name buffer
+                         "flatpak-spawn" "--host" "--watch-bus" "--"
+                         program program-args))))
+      (apply fun args))))
+
+(defun galactron-flatpak--call-process-toolbox-a (fun &rest args)
+  (if galactron-flatpak--call-process-override-p
+      (apply fun args)
+    (cl-letf* ((galactron-flatpak--call-process-override-p t)
+               (call-process (symbol-function 'call-process))
+               ((symbol-function 'call-process)
+                (lambda (program &optional infile destination display &rest args)
+                  (apply call-process
+                         "flatpak-spawn"
+                         infile destination display
+                         "--host" "--watch-bus" "--"
+                         "toolbox" "run" "--"
+                         program args))))
+      (apply fun args))))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-tramp][Flatpak Tramp]] (请先[[elisp:(package-install 'flakpak-tramp)][安装flatpak-tramp]])
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-tramp t
+  "Flatpak Tramp"
+  :type 'boolean
+  :tag "Flatpak Tramp")
+
+(when galactron-flatpak-enabled-tramp
+  (galactron-with-package-installed flatpak-tramp
+    (add-hook 'window-setup-hook 'switch-mode)
+    (keymap-global-set "C-x M-s" 'switch-mode-switch)))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-docview][DocView调用Flatpak命令]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-docview t
+  "DocView调用Flatpak命令"
+  :type 'boolean
+  :tag "DocView")
+
+(defun galactron-flatpak--docview-spawn-host-a (args)
+  (list
+   (car args)
+   "flatpak-spawn"
+   (append
+    (list "--host" "--watch-bus" "--" (cadr args))
+    (caddr args))
+   (cadddr args)))
+
+(defun galactron-flatpak--docview-executable-find-a (fun &rest args)
+  (cl-letf (((symbol-function 'executable-find) 'always))
+    (apply fun args)))
+
+(defvar doc-view-pdfdraw-program)
+(defvar doc-view-pdf->png-converter-ghostscript)
+(defvar doc-view-pdf->png-converter-mupdf)
+
+(when (and galactron-flatpak-enabled-docview
+           (equal (getenv "container") "flatpak"))
+  (advice-add 'doc-view-start-process
+              :filter-args 'galactron-flatpak--docview-spawn-host-a)
+
+  (dolist (fun
+           '(doc-view-pdf-password-protected-ghostscript-p
+             doc-view-pdf-password-protected-pdfdraw-p))
+    (advice-add fun :around 'galactron-flatpak--call-process-a))
+
+  (dolist (fun
+           '(doc-view-mode-p
+             doc-view-dvi->pdf
+             doc-view-pdf->txt
+             doc-view-ps->pdf
+             doc-view-imenu-setup
+             doc-view-initiate-display))
+    (advice-add fun
+                :around 'galactron-flatpak--docview-executable-find-a))
+
+  (with-eval-after-load 'doc-view
+    (galactron-default
+     doc-view-ghostscript-program
+     (cond
+      ((galactron-flatpak--executable-find "gs") "gs")
+      (t nil)))
+
+    (galactron-default
+     doc-view-pdfdraw-program
+     (cond
+      ((galactron-flatpak--executable-find "pdfdraw") "pdfdraw")
+      ((galactron-flatpak--executable-find "mudraw") "mudraw")
+      ((galactron-flatpak--executable-find "mutool") "mutool")
+      (t nil)))
+
+    (cl-letf (((symbol-function 'executable-find) 'identity))
+      (galactron-default
+       doc-view-pdf->png-converter-function
+       (if doc-view-pdfdraw-program
+           #'doc-view-pdf->png-converter-mupdf
+         #'doc-view-pdf->png-converter-ghostscript)))
+
+    (galactron-default
+     doc-view-imenu-enabled
+     (galactron-flatpak--executable-find "mutool"))
+
+    (galactron-default
+     doc-view-dvipdfm-program
+     (cond
+      ((galactron-flatpak--executable-find "dvipdfm") "dvipdfm")
+      (t nil)))
+
+    (galactron-default
+     doc-view-dvipdf-program
+     (cond
+      ((galactron-flatpak--executable-find "dvipdf") "dvipdf")
+      (t nil)))
+
+    (galactron-default
+     doc-view-odf->pdf-converter-program
+     (cond
+      ((galactron-flatpak--executable-find "soffice") "soffice")
+      ((galactron-flatpak--executable-find "unoconv") "unoconv")
+      (t nil)))
+
+    (galactron-default
+     doc-view-ps2pdf-program
+     (cond
+      ((galactron-flatpak--executable-find "ps2pdf") "ps2pdf")
+      (t nil)))
+
+    (galactron-default
+     doc-view-pdftotext-program
+     (cond
+      ((galactron-flatpak--executable-find "pdftotext") "pdftotext")
+      (t nil)))))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-pdf][PDF Tools调用Flatpak命令]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-pdf t
+  "PDF Tools调用Flatpak命令"
+  :type 'boolean
+  :tag "PDF Tools")
+
+(when (and galactron-flatpak-enabled-pdf
+           (equal (getenv "container") "flatpak"))
+
+  (galactron-with-package-installed pdf-tools
+    (dolist (fun
+             '(pdf-info-check-epdfinfo
+               pdf-util-convert
+               pdf-util-image-file-size))
+      (advice-add fun :around 'galactron-flatpak--call-process-a))
+
+    (dolist (fun
+             '(pdf-info-process-assert-running
+               pdf-misc-print-document
+               pdf-util-convert-asynch))
+      (advice-add fun :around 'galactron-flatpak--start-process-a))))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-djvu][Djvu调用Flatpak命令]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-djvu t
+  "Djvu调用Flatpak命令"
+  :type 'boolean
+  :tag "Djvu")
+
+(when (and galactron-flatpak-enabled-djvu
+           (equal (getenv "container") "flatpak"))
+  (galactron-with-package-installed djvu
+    (dolist (item
+             '((djvu-djvused . "djvused")
+               (djvu-image . "ddjvu")
+               (djvu-inspect-file . "djvused")
+               (djvu-delete-page . "djvm")))
+      (advice-add (car item) :around
+                  (if (galactron-flatpak--executable-find (cdr item))
+                      'galactron-flatpak--call-process-a
+                    'galactron-flatpak--call-process-toolbox-a)))))
+#+END_SRC
+
+** [[elisp:(customize-group 'galactron-capture)][Org Capture]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-capture.el
+:VISIBILITY: content
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="capture",desc="Org Capture")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(require 'orb-capture)
+
+;;;###autoload
+(defun galactron-capture-collect-targets ()
+  (save-excursion
+    (save-restriction
+      (widen)
+      (apply 'append (mapcar 'orb-capture-collect
+                             (mapcar 'car orb-capture-targets))))))
+
+;;;###autoload
+(defun galactron-capture-define-targets (targets)
+  (pcase-dolist (`(,capture ,key ,args) targets)
+    (when-let ((symbol
+                (assoc-default capture orb-capture-targets)))
+      (galactron--default-assoc symbol key args))))
+#+END_SRC
+
+*** [[help:galactron-capture-enabled-note][随手记]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-capture-enabled-note t
+  "随手记"
+  :type 'boolean
+  :tag "Note")
+
+(when galactron-capture-enabled-note
+  (galactron-shortcut-add-item
+   "<capture-note>" "随手记"
+   'orb-capture-note
+   :help "随手记")
+  (keymap-global-set "C-x M-n" 'orb-capture-note))
+#+END_SRC
+
+*** [[help:galactron-capture-enabled-todo][任务]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-capture-enabled-todo t
+  "任务"
+  :type 'boolean
+  :tag "TODO")
+
+(when galactron-capture-enabled-todo
+  (galactron-shortcut-add-item
+   "<capture-todo-with-context>" "记录关联任务"
+   'orb-capture-todo-with-context
+   :enable '(derived-mode-p 'org-mode)
+   :help "记录关联任务")
+
+  (galactron-shortcut-add-item
+   "<capture-todo>" "记录无关任务"
+   'orb-capture-todo
+   :help "记录无关任务")
+
+  (keymap-global-set "C-x M-t" 'orb-capture-todo)
+  (with-eval-after-load 'org
+    (keymap-set org-mode-map
+                "C-c t" 'orb-capture-todo-with-context)))
+#+END_SRC
+
+*** [[help:galactron-capture-enabled-clip][网页剪辑]] (请先[[elisp:(package-install 'html2org)][安装htmlorg]])
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-capture-enabled-clip t
+  "网页剪辑"
+  :type 'boolean
+  :tag "Clip")
+
+(when galactron-capture-enabled-clip
+  (galactron-with-package-installed html2org
+    (advice-add 'server-execute
+                :before 'orb-capture-clip--load-protocol)))
+#+END_SRC
+
+*** [[help:galactron-capture-enabled-asset][收录文件]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-capture-enabled-asset t
+  "收录文件"
+  :type 'boolean
+  :tag "Asset")
+
+(when galactron-capture-enabled-asset
+  (galactron-shortcut-add-item
+   "<capture-asset>" "收录文件"
+   'orb-capture-asset
+   :help "收录文件")
+  (keymap-global-set "C-x M-a" 'orb-capture-asset))
+#+END_SRC
+
+** [[elisp:(customize-group 'galactron-agenda)][日程]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-agenda.el
+:VISIBILITY: content
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="agenda",desc="日程")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(defmacro galactron-agenda-add ()
+  (let ((file (file-name-with-extension load-file-name ".org")))
+    `(with-eval-after-load 'org-agenda
+       (galactron-default-member org-agenda-files ,file))))
+#+END_SRC
+
+*** [[help:galactron-agenda-enabled-todo-state][TODO状态]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-agenda-enabled-todo-state t
+  "TODO状态"
+  :type 'boolean
+  :tag "TODO State")
+
+(defun galactron-agenda--clock-in-h ()
+  (when (equal (org-get-todo-state) "TODO")
+    (org-todo "WIP")))
+
+(when galactron-agenda-enabled-todo-state
+  (with-eval-after-load 'org
+    (galactron-default org-todo-keywords
+                    '((sequence "TODO" "WIP" "|" "DONE")))
+    (add-hook 'org-clock-in-hook 'galactron-agenda--clock-in-h)))
+#+END_SRC
+
+*** [[help:galactron-agenda-enabled-dashboard][Dashboard]] (请先[[elisp:(package-install 'org-super-agenda)][安装org-super-agenda]])
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-agenda-enabled-dashboard t
+  "Dashboard"
+  :type 'boolean
+  :tag "Dashboard")
+
+(defun galactron-agenda-dashboard ()
+  (interactive)
+  (org-agenda nil "d"))
+
+(when galactron-agenda-enabled-dashboard
+  (galactron-with-package-installed org-super-agenda
+    (with-eval-after-load 'org-agenda
+      (org-super-agenda-mode t)
+      (galactron-default-assoc
+       org-agenda-custom-commands
+       "d"
+       '("Dashboard"
+         ((agenda
+           ""
+           ((org-agenda-overriding-header "DEADLINE")
+            (org-agenda-span 1)
+            (org-agenda-time-grid nil)
+            (org-agenda-show-all-dates nil)
+            (org-agenda-entry-types '(:deadline))
+            (org-deadline-warning-days 30)
+            (org-agenda-sorting-strategy
+             '(deadline-up priority-down))))
+          (agenda
+           ""
+           ((org-agenda-overriding-header "TODO")
+            (org-agenda-span 8)
+            (org-agenda-time-grid nil)
+            (org-agenda-show-all-dates nil)
+            (org-agenda-skip-function
+             '(or (org-agenda-skip-entry-if 'deadline)
+                  (org-agenda-skip-entry-if 'todo 'done)))
+            (org-agenda-sorting-strategy
+             '(priority-down scheduled-up))
+            (org-super-agenda-groups
+             '((:name "WIP" :todo ("WIP"))
+               (:name "INBOX" :not (:habit t))
+               (:name "HABIT" :habit t)))))
+          (tags
+           "+SCHEDULED>=\"<+7d>\"-STYLE=\"habit\""
+           ((org-agenda-sorting-strategy
+             '(priority-down scheduled-up))
+            (org-agenda-overriding-header "UPCOMING")))
+          (todo
+           "TODO"
+           ((org-agenda-overriding-header "Backlog")
+            (org-agenda-todo-ignore-with-date t)
+            (org-agenda-sorting-strategy '(priority-down))))))))
+
+    (galactron-shortcut-add-item
+     "<agenda-dashboard>" "待办事项"
+     'galactron-agenda-dashboard
+     :help "待办事项")
+    (keymap-global-set "C-x M-d" 'galactron-agenda-dashboard)))
+#+END_SRC
+
+** [[elisp:(customize-group 'galactron-orb)][Org-Mode SQLite缓存]] (请先[[elisp:(package-install 'orb)][安装orb]])
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-orb.el
+:VISIBILITY: children
+:END:
+
+这个得放在最后，不然前面的还没生效，会导致缓存数据出错
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="orb",desc="修改Orb设置")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp
+(galactron-default orb-db-location
+                (locate-user-emacs-file "orb.sqlite"))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-roam-refs][ROAM_REFS]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-roam-refs t
+  "ROAM_REFS"
+  :type 'boolean
+  :tag "ROAM_REFS")
+
+(when galactron-orb-enabled-roam-refs
+  (galactron-with-package-installed orb
+    (galactron-default orb-property-refs "ROAM_REFS")))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-auto-sync][保存时自动同步]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-auto-sync t
+  "保存时自动同步"
+  :type 'boolean
+  :tag "Auto Sync")
+
+(when galactron-orb-enabled-auto-sync
+  (with-eval-after-load 'org
+    (orb-db-autosync-mode t)))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-smart-refresh][尽量避免刷新]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-smart-refresh t
+  "尽量避免刷新"
+  :type 'boolean
+  :tag "Smart Refresh")
+
+(when galactron-orb-enabled-smart-refresh
+  (with-eval-after-load 'org
+    (orb-db-smartrefresh-mode t)))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-id-mode][ID链接增强]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-id-mode t
+  "ID链接增强"
+  :type 'boolean
+  :tag "Orb ID mode")
+
+(when galactron-orb-enabled-id-mode
+  (with-eval-after-load 'org
+    (orb-id-mode t)))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-agenda][从缓存查询Agenda]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-agenda t
+  "从缓存查询Agenda"
+  :type 'boolean
+  :tag "Orb Agenda Mode")
+
+(when galactron-orb-enabled-agenda
+  (with-eval-after-load 'org-agenda
+    (orb-agenda-mode t)))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-sidebar][侧栏增强]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-sidebar t
+  "侧栏增强"
+  :type 'boolean
+  :tag "Orb Sidebar DB mode")
+
+(when galactron-org-enabled-sidebar
+  (when galactron-orb-enabled-sidebar
+    (galactron-with-package-installed orb
+      (orb-sidebar-db-mode t))))
+#+END_SRC
+
+*** [[help:galactron-orb-enabled-capture][Capture增强]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-capture t
+  "Capture增强"
+  :type 'boolean
+  :tag "Orb Capture DB mode")
+
+(when galactron-orb-enabled-capture
+  (galactron-with-package-installed orb
+    (orb-capture-db-mode t)))
+#+END_SRC
+
+** [[elisp:(customize-group 'galactron-accessories)][Bells and Whistles]]
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-accessories.el
+:VISIBILITY: content
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="accessories",desc="花里胡哨")>>
+#+END_SRC
+
+*** [[help:galactron-accessories-enabled-reminder][启动退出提醒]]
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-accessories-enabled-reminder t
+  "启动退出提醒"
+  :type 'boolean
+  :tag "Reminder")
+
+(defcustom galactron-accessories-reminder-hook nil
+  "启动退出Emacs时提醒"
+  :type 'hook
+  :tag "Reminder hook")
+
+(defun galactron-accessories--reminder-run-hooks ()
+  (run-hooks 'galactron-accessories-reminder-hook))
+
+(defun galactron-accessories--reminder-confirm-kill (prompt)
+  (galactron-accessories--reminder-run-hooks)
+  (yes-or-no-p prompt))
+
+(when galactron-accessories-enabled-reminder
+  (add-hook 'window-setup-hook
+            'galactron-accessories--reminder-run-hooks)
+  (galactron-default confirm-kill-emacs
+                  'galactron-accessories--reminder-confirm-kill))
+#+END_SRC
+
+*** [[help:galactron-accessories-enabled-sticker][便利贴]]
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-accessories-enabled-sticker t
+  "便利贴"
+  :type 'boolean
+  :tag "Sticker")
+
+(defvar galactron-accessories--sticker-windows nil)
+
+(defcustom galactron-accessories-sticker-functions nil
+  "返回Sticker Buffer"
+  :type '(repeat function)
+  :tag "Sticker functions")
+
+(defun galactron-accessories-sticker-toggle (&optional arg)
+  (interactive "P")
+  (let ((valid-windows
+         (seq-filter 'window-valid-p
+                     galactron-accessories--sticker-windows)))
+    (when valid-windows
+      (dolist (window valid-windows)
+        (quit-window t window)))
+    (when (or arg
+              (not valid-windows))
+      (setq galactron-accessories--sticker-windows
+            (seq-map-indexed
+             (lambda (f i)
+               (display-buffer-in-side-window
+                (funcall f)
+                `((side . top) (slot . ,i))))
+             galactron-accessories-sticker-functions)))))
+
+(defun galactron-accessories--sticker-show ()
+  (galactron-accessories-sticker-toggle t))
+
+(when galactron-accessories-enabled-sticker
+  (add-hook 'galactron-accessories-reminder-hook
+            'galactron-accessories--sticker-show)
+  (keymap-global-set "C-`" 'galactron-accessories-sticker-toggle))
+#+END_SRC
+
+* 深入Galactron
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron.el
+:VISIBILITY: content
+:END:
+** 自制配置文件
+:PROPERTIES:
+:VISIBILITY: children
+:END:
+
+使用Org-Babel可以在Org文件里写配置。对于能立即生效的配置，修改好配置后，直接在代码块里 ~C-c C-c~ ，避免每次都要重启Emacs。
+
+*** 添加到[[help:galactron-init-files][galactron-init-files]]
+
+在加载Galactron内置配置文件之前，Galactron首先会加载[[help:galactron-init-files][galactron-init-files]]里的文件。
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-init-files nil
+  "Galactron最先加载的配置文件(会比Galactron自带的配置文件先加载)"
+  :type '(repeat (file :must-match t))
+  :group 'galactron)
+#+END_SRC
+
+建议只加一个文件，在这个文件里用 ~galactron-load-file~ 加载其他配置文件，这些会在Galactron自带配置文件加载完成之后再加载。
+
+#+BEGIN_SRC emacs-lisp
+(defvar galactron--init-files nil)
+(setq galactron--init-files (copy-sequence galactron-init-files))
+
+(defmacro galactron-load-file (file-name)
+  (let ((full-name
+         (expand-file-name file-name
+                           (file-name-directory
+                            (or byte-compile-dest-file
+                                load-file-name)))))
+    `(unless (member ,full-name galactron--init-files)
+       (if galactron--init-files
+           (setcdr (last galactron--init-files) (list ,full-name))
+         (setq galactron--init-files (list ,full-name))))))
+#+END_SRC
+
+*** 修改Emacs默认设置
+
+使用 ~galactron-default*~ 修改设置时，不会影响Custom功能，只要在Custom里保存了自己的设置（要保留默认配置就Add Comment），下次启动Galactron中的配置就不会生效
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--variable-saved-p (symbol)
+  (or (get symbol 'saved-value)
+      (get symbol 'saved-variable-comment)))
+#+END_SRC
+
+要修改单一值可以用 ~galactron-default~
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--default (symbol value)
+  (unless (galactron--variable-saved-p symbol)
+    (customize-set-variable symbol value)))
+
+(defmacro galactron-default (symbol value)
+  `(galactron--default ',symbol ,value))
+#+END_SRC
+
+要往List里加一项，可以用 ~galactron-default-member~
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--default-member (symbol value)
+  (unless (or (galactron--variable-saved-p symbol)
+              (member value (symbol-value symbol)))
+    (customize-set-variable symbol
+                            (append (symbol-value symbol)
+                                    (list value)))))
+
+(defmacro galactron-default-member (symbol value)
+  `(galactron--default-member ',symbol ,value))
+#+END_SRC
+
+要往Assoc List里加一项，可以用 ~galactron-default-assoc~
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--default-assoc (symbol key value)
+  (unless (or (galactron--variable-saved-p symbol)
+              (equal (cons key value)
+                     (assoc key (symbol-value symbol))))
+     (customize-set-variable
+      symbol
+      (append (assoc-delete-all key
+                                (copy-alist (symbol-value symbol)))
+              (list (cons key value))))))
+
+(defmacro galactron-default-assoc (symbol key value)
+  `(galactron--default-assoc ',symbol ,key ,value))
+#+END_SRC
+
+对于可以动态调整的配置，可以用 ~:set 'galactron-set-default-value~
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron-set-default-value (symbol value)
+  (unless (and (boundp symbol)
+               (eq (symbol-value symbol) value))
+    (set-default-toplevel-value symbol value)
+    (funcall
+     (intern (string-replace "-enabled-" "-set-enabled-"
+                             (symbol-name symbol)))
+     value)))
+#+END_SRC
+
+*** 延迟加载
+
+为了避免拖慢Emacs启动，对于一个具体的模块，可以用[[help:with-eval-after-load][with-eval-after-load]]。对于一个包，用[[help:galactron-with-package-installed][galactron-with-package-installed]]
+
+#+BEGIN_SRC emacs-lisp
+(defmacro galactron--with-messages (&rest body)
+  (declare (indent 0) (debug (form body)))
+  `(with-current-buffer (get-buffer "*Messages*")
+     (save-excursion
+       (goto-char (point-max))
+       (let ((inhibit-read-only t))
+         (unless (zerop (current-column)) (insert "\n"))
+         ,@body))))
+
+(defun galactron--package-install (package)
+  (interactive)
+  (when (yes-or-no-p
+         (format "Do you want to install '%s' now?" package))
+    (package-install package)))
+
+(defun galactron--find-file (file-name)
+  (interactive)
+  (let ((org-file (file-name-with-extension file-name ".org")))
+    (if (file-exists-p org-file)
+        (find-file org-file)
+      (find-file (file-name-with-extension file-name ".el")))))
+
+(defmacro galactron-with-package-installed (package &rest body)
+  (declare (indent 1) (debug (form body)))
+  (unless (package-installed-p package)
+    (galactron--with-messages
+      (insert
+       (concat
+        "由于未"
+        (buttonize (format "安装%S" package)
+                   'galactron--package-install package)
+        "，部分配置未生效，"
+        (buttonize "查看详情" 'galactron--find-file load-file-name)
+        "\n"))))
+  (let ((autoloads (intern (format "%s-autoloads" package))))
+    `(with-eval-after-load ',autoloads
+       ,@body)))
+#+END_SRC
+
+** 启动过程
+:PROPERTIES:
+:VISIBILITY: children
+:END:
+*** 设置 ~after-init-hook~
+
+假如修改了[[help:package-enable-at-startup][package-enable-at-startup]] ，得保证在[[help:after-init-hook][after-init-hook]]之前就 [[help:package-activate-all][package-activate-all]]了。galactron依赖[[help:after-init-hook][after-init-hook]]，分别把 ~galactron--first-h~ 和 ~galactron--last-h~ 加到最前和最后。
+
+#+BEGIN_SRC emacs-lisp
+;;;###autoload(add-hook 'after-init-hook 'galactron--first-h -100)
+;;;###autoload(add-hook 'after-init-hook 'galactron--last-h 100)
+#+END_SRC
+
+如果不在[[help:after-init-hook][after-init-hook]]中执行，或者[[help:after-init-hook][after-init-hook]]最前最后不是这两者，就会报错，并拒绝执行。
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--check-after-init ()
+  (cond
+   ((not after-init-time)
+    (lwarn 'galactron :error "called before `after-init-hook'")
+    nil)
+   ((and
+     (eq (car after-init-hook) 'galactron--first-h)
+     (eq (car (last after-init-hook)) 'galactron--last-h))
+    t)
+   (t
+    (lwarn 'galactron :error "bad `after-init-hook'")
+    nil)))
+#+END_SRC
+
+~galactron--first-h~ 会加载配置文件和恢复Menu/Tab/Tool Bar的设置
+
+#+BEGIN_SRC emacs-lisp
+(defvar galactron--before-init-time nil)
+(defvar galactron--first-h-finished nil)
+
+;;;###autoload
+(defun galactron--first-h ()
+  (if galactron--before-init-time
+      (lwarn 'galactron
+             :warning "`galactron--first-h' called twice")
+    (setq galactron--before-init-time (current-time))
+    (when (galactron--check-after-init)
+      (let ((result :error))
+        (unwind-protect
+            (progn
+              (galactron--load-init-files)
+              (galactron--restore-bars)
+              (setq result t))
+          (setq galactron--first-h-finished result))))))
+#+END_SRC
+
+~galactron--last-h~ 会按耗时多少，列出所有步骤
+
+#+BEGIN_SRC emacs-lisp
+(defvar galactron--last-h-started nil)
+(defvar galactron--after-init-time nil)
+(defvar galactron--load-time nil)
+
+;;;###autoload
+(defun galactron--last-h ()
+  (if galactron--last-h-started
+      (lwarn 'galactron :warning "`galactron--last-h' called twice")
+    (setq galactron--last-h-started t)
+    (cond
+     ((not galactron--before-init-time)
+      (lwarn
+       'galactron
+       :error
+       "`galactron--last-h' called before `galactron--first-h'"))
+     ((not galactron--first-h-finished)
+      (lwarn
+       'galactron
+       :error "`galactron--last-h' called in `galactron--first-h'"))
+     ((not (eq galactron--first-h-finished t))
+      (lwarn 'galactron :error "`galactron--first-h' failed"))
+     ((galactron--check-after-init)
+      (setq galactron--after-init-time (current-time))
+      (push (cons
+             (float-time (time-subtract after-init-time
+                                        before-init-time))
+             "emacs-init-time")
+            galactron--load-time)
+      (galactron--record-time "after-init-hook"
+                              galactron--before-init-time)
+      (galactron--record-time "" before-init-time)
+      (message "time   config-file-name")
+      (let ((pkg-dir
+             (package-desc-dir (cadr (assq 'galactron
+                                           package-alist)))))
+        (pcase-dolist (`(,time . ,file-name)
+                       (seq-sort-by 'car '> galactron--load-time))
+          (message
+           "%.04f %s" time
+           (cond
+            ((galactron--org-file-p file-name)
+             (file-relative-name file-name org-directory))
+            ((file-name-absolute-p file-name)
+             (file-relative-name file-name pkg-dir))
+            (t
+             file-name)))))))))
+#+END_SRC
+
+*** 设置 ~window-setup-hook~
+
+显示Emacs启动总时间，不要自己骗自己
+
+#+BEGIN_SRC emacs-lisp
+;;;###autoload(add-hook 'window-setup-hook 'galactron--start-time-h 100)
+
+(defun galactron--start-time-h ()
+  (message "emacs took more than %s seconds to start"
+           (float-time (time-since before-init-time))))
+#+END_SRC
+
+*** 跳过Menu/Tab/Tool Bar
+
+这三个是真正的耗时大户，谁都比不上
+
+#+BEGIN_SRC emacs-lisp
+;;;###autoload(setq emacs-basic-display t)
+#+END_SRC
+
+*** 加载配置文件
+
+按顺序加载 ~galactron--init-files~ 里的文件
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--load-init-files ()
+  (dolist (file-name galactron--init-files)
+    (let ((start-time (current-time)))
+      (galactron--load-file file-name)
+      (galactron--record-time file-name start-time)))
+  (galactron--record-time "galactron" galactron--before-init-time))
+#+END_SRC
+
+加在配置文件的过程中，会记录每个时间的用时，方便找出耗时大户
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--record-time (file-name time)
+  (push (cons (float-time (time-since time)) file-name)
+        galactron--load-time))
+#+END_SRC
+
+如果是Org文件，会用 ~org-babel-load-file~ 加载
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--org-file-p (file-name)
+  (provided-mode-derived-p
+   (assoc-default file-name auto-mode-alist 'string-match-p)
+   'org-mode))
+
+(defun galactron--load-file (file-name)
+  (if (galactron--org-file-p file-name)
+      (let ((tangled (file-name-with-extension file-name ".el")))
+        (if (file-newer-than-file-p file-name tangled)
+            (org-babel-load-file file-name)
+          (load-file tangled)))
+    (load file-name)))
+#+END_SRC
+
+*** 加载内置配置文件
+
+#+BEGIN_SRC emacs-lisp
+(when galactron-group-enabled-server
+  (galactron-load-file "galactron-server"))
+
+(when galactron-group-enabled-package
+  (galactron-load-file "galactron-package"))
+
+(when galactron-group-enabled-display
+  (galactron-load-file "galactron-display"))
+
+(when galactron-group-enabled-edit
+  (galactron-load-file "galactron-edit"))
+
+(when galactron-group-enabled-frame
+  (galactron-load-file "galactron-frame"))
+
+(when galactron-group-enabled-org
+  (galactron-load-file "galactron-org"))
+
+(when galactron-group-enabled-pdf
+  (galactron-with-package-installed pdf-tools
+    (galactron-load-file "galactron-pdf")))
+
+(when galactron-group-enabled-nov
+  (galactron-with-package-installed nov
+    (galactron-load-file "galactron-nov")))
+
+(when galactron-group-enabled-largefile
+  (galactron-with-package-installed largefile
+    (galactron-load-file "galactron-largefile")))
+
+(when galactron-group-enabled-wanderlust
+  (galactron-with-package-installed wanderlust
+    (galactron-load-file "galactron-wanderlust")))
+
+(when galactron-group-enabled-flatpak
+  (galactron-load-file "galactron-flatpak"))
+
+(when galactron-group-enabled-capture
+  (galactron-with-package-installed orb
+    (galactron-load-file "galactron-capture")))
+
+(when galactron-group-enabled-agenda
+  (galactron-load-file "galactron-agenda"))
+
+(when galactron-group-enabled-orb
+  (galactron-with-package-installed orb
+    (galactron-load-file "galactron-orb")))
+
+(when galactron-group-enabled-accessories
+  (galactron-load-file "galactron-accessories"))
+#+END_SRC
+
+*** 恢复Menu/Tab/Tool Bar
+
+Emacs启动时，最后会在[[help:frame-notice-user-settings][frame-notice-user-settings]]里再设置一遍Frame的参数，所以只要在这之前把[[help:default-frame-alist][default-frame-alist]]改了就可以了。
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--restore-bars ()
+  (when (galactron--variable-reset-value menu-bar-mode)
+    (push (cons 'menu-bar-lines 1) default-frame-alist))
+  (when (galactron--variable-reset-value tab-bar-mode)
+    (push (cons 'tab-bar-lines 1) default-frame-alist))
+  (when (galactron--variable-reset-value tool-bar-mode)
+    (push (cons 'tool-bar-lines 1) default-frame-alist)))
+#+END_SRC
+
+需要先根据目前设置的[[help:menu-bar-mode][menu-bar-mode]], [[help:tab-bar-mode][tab-bar-mode]], [[help:tool-bar-mode][tool-bar-mode]]来决定要不要加
+
+#+BEGIN_SRC emacs-lisp
+(defun galactron--variable-get-think-value (symbol)
+  (cond
+   ((get symbol 'customized-value)
+    (eval (car (get symbol 'customized-value))))
+   ((get symbol 'customized-variable-comment)
+    nil)
+   ((get symbol 'saved-value)
+    (eval (car (get symbol 'saved-value))))
+   ((get symbol 'saved-variabled-comment)
+    nil)
+   (t
+    (eval (car (get symbol 'standard-value))))))
+
+(defmacro galactron--variable-reset-value (symbol)
+  (let ((think-var (gensym)))
+    `(let ((,think-var (galactron--variable-get-think-value ',symbol)))
+       (unless (equal ,think-var ,symbol)
+         (setq ,symbol ,think-var)))))
+#+END_SRC
+
+* 附录
+** Package Header
+
+#+NAME: package-header
+#+BEGIN_SRC emacs-lisp :noweb yes
+<<header(name="galactron",desc=(org-get-title))>>
+
+;; Package-Requires: ((emacs "29.0") (org "9.6"))
+;; Version: 0.0.1
+
+<<copying>>
+
+;;; Commentary:
+#+END_SRC
+
+** Module Header
+
+#+NAME: module-header
+#+BEGIN_SRC emacs-lisp :noweb yes :var name="" :var desc=""
+(format
+ ";;; galactron-%s.el --- %s  -*- coding: utf-8; lexical-binding: t; -*-
+
+;;; Code:
+(require 'galactron)
+
+;;;###autoload(defcustom galactron-group-enabled-%s t %S :type 'boolean :tag %S)
+
+(defgroup galactron-%s nil
+  %S
+  :prefix %S
+  :tag %S
+  :group 'galactron)"
+ name desc
+ name (concat "启用" desc) (capitalize name)
+ name desc (concat "galactron-" name "-") (capitalize name))
+#+END_SRC
+
+** Header
+
+#+NAME: header
+#+BEGIN_SRC emacs-lisp :var name="" :var desc=""
+(format ";;; %s.el --- %s  -*- coding: utf-8; lexical-binding: t; -*-"
+        name desc)
+#+END_SRC
+
+** Footer
+:PROPERTIES:
+:header-args:emacs-lisp: :comments no :noweb yes
+:END:
+
+#+NAME: footer
+#+BEGIN_SRC emacs-lisp :var name=""
+(format "(provide '%s)\n;;; %s.el ends here" name name)
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron.el
+<<footer(name="galactron")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-server.el
+<<footer(name="galactron-server")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-package.el
+<<footer(name="galactron-package")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-display.el
+<<footer(name="galactron-display")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-edit.el
+<<footer(name="galactron-edit")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-frame.el
+<<footer(name="galactron-frame")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-org.el
+<<footer(name="galactron-org")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-pdf.el
+<<footer(name="galactron-pdf")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-nov.el
+<<footer(name="galactron-nov")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-largefile.el
+<<footer(name="galactron-largefile")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-wanderlust.el
+<<footer(name="galactron-wanderlust")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-flatpak.el
+<<footer(name="galactron-flatpak")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-capture.el
+<<footer(name="galactron-capture")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-agenda.el
+<<footer(name="galactron-agenda")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-orb.el
+<<footer(name="galactron-orb")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-accessories.el
+<<footer(name="galactron-accessories")>>
+#+END_SRC
+
+** COPYING
+
+#+NAME: copying
+#+BEGIN_SRC emacs-lisp
+;; This file is NOT part of GNU Emacs.
+
+;; This program is free software; you can redistribute it and/or
+;; modify it under the terms of the GNU General Public License as
+;; published by the Free Software Foundation, either version 3 of the
+;; License, or (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful, but
+;; WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;; General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see
+;; <https://www.gnu.org/licenses/>.
+#+END_SRC

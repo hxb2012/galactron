@@ -1,0 +1,35 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches:
+    - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: Install Flatpak
+      run: sudo apt-get install flatpak
+    - name: Install Emacs
+      run: sudo flatpak install -y https://dl.flathub.org/repo/appstream/org.gnu.emacs.flatpakref
+    - name: Org Babel Tangle
+      run: flatpak run org.gnu.emacs --batch --eval "(progn (find-file \"README.org\") (let (org-confirm-babel-evaluate) (org-babel-tangle)))"
+    - name: Commit files
+      run: |
+        git branch master
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add -f *.el
+        GIT_AUTHOR_DATE=`git show -s --format=%ai HEAD` GIT_COMMITTER_DATE=`git show -s --format=%ci HEAD` git commit -m "Generate ELisp files"
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      if: ${{ github.ref == 'refs/heads/main' }}
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: master
+        force: true

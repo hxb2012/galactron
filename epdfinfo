@@ -1,0 +1,1036 @@
+#!/usr/bin/env python3
+
+import gi
+gi.require_version('Poppler', '0.18')
+from gi.repository import GLib, Poppler
+import sys
+import re
+from inspect import signature, _empty
+from tempfile import NamedTemporaryFile
+from datetime import datetime, date
+from math import pi
+import cairo
+
+HAVE_POPPLER_FIND_OPTS = hasattr(Poppler, 'FindFlags')
+
+class Document:
+    def __init__(self, filename, password):
+        self.filename = filename
+        self.password = password
+        uri = GLib.filename_to_uri(filename)
+        self.pdf = Poppler.Document.new_from_file(uri, password)
+        self.annotation_pages = None
+        self.annotation_keys = None
+        self.options = {}
+
+def arg_escape_repl(m):
+    if m.group(0) == "\\n":
+        return "\n"
+    else:
+        return m.group(0)[1:]
+
+def response_escape_repl(m):
+    if m.group(0) == '\n':
+        return '\\n'
+    else:
+        return '\\' + m.group(0)
+
+def print_error_response(fmt, *args, **kwargs):
+    print("ERR", fmt.format(*args, **kwargs), ".", sep="\n", flush=True)
+
+def image_recolor(surface, fg, bg, usecolors):
+    if fg is None or bg is None:
+        return
+
+    width = surface.get_width()
+    height = surface.get_height()
+    rgb_fg = fg.red / 65535.0, fg.green / 65535.0, fg.blue / 65535.0
+    rgb_bg = bg.red / 65535.0, bg.green / 65535.0, bg.blue / 65535.0
+    rgb_diff = tuple(b-f for b,f in zip(rgb_bg, rgb_fg))
+
+    if usecolors == 1:
+        cr = cairo.Context(surface)
+        cr.set_operator(cairo.OPERATOR_HSL_COLOR)
+        cr.rectangle(0, 0, width, height)
+        cr.set_source_rgb(0,0,0)
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_MULTIPLY)
+        cr.rectangle(0, 0, width, height)
+        cr.set_source_rgb(*map(abs, rgb_diff))
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_ADD)
+        cr.rectangle(0, 0, width, height)
+        cr.set_source_rgb(*(f if d > 0 else 0 for f, d in zip(rgb_fg, rgb_diff)))
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_DIFFERENCE)
+        cr.rectangle(0, 0, width, height);
+        cr.set_source_rgb(*(f if d < 0 else 0 for f, d in zip(rgb_fg, rgb_diff)))
+        cr.fill()
+
+    elif usecolors == 2:
+        cr = cairo.Context(surface)
+        cr.set_operator(cairo.OPERATOR_HSL_COLOR)
+        cr.rectangle(0, 0, width, height)
+        cr.set_source_rgb(0,0,0)
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_DIFFERENCE)
+        cr.rectangle(0, 0, width, height);
+        cr.set_source_rgb(1.0,1.0,1.0)
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_MULTIPLY)
+        cr.rectangle(0, 0, width, height)
+        cr.set_source_rgb(*(abs(c) for c in rgb_diff))
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_ADD)
+        cr.rectangle(0, 0, width, height)
+        cr.set_source_rgb(*(f if d < 0 else 0 for f, d in zip(rgb_bg, rgb_diff)))
+        cr.fill()
+
+        cr.set_operator(cairo.OPERATOR_DIFFERENCE)
+        cr.rectangle(0, 0, width, height);
+        cr.set_source_rgb(*(f if d > 0 else 0 for f, d in zip(rgb_bg, rgb_diff)))
+        cr.fill()
+
+
+def image_render_page(pdf, page, width, do_render_annotations, options):
+    size = page.get_size()
+    scale = width / size.width
+    height = int(scale * size.height + 0.5)
+
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, int(width), height)
+    assert surface is not None, "Failed to create cairo surface"
+
+    cr = cairo.Context(surface)
+    assert cr is not None, "Failed to create cairo handle"
+    cr.translate(0, 0)
+    cr.scale(scale, scale)
+
+    if (not do_render_annotations) or (options and options.get(":render/printed", None)):
+        page.render_for_printing_with_options(cr, Poppler.PrintFlags.DOCUMENT)
+    else:
+        page.render(cr)
+    cr.set_operator(cairo.OPERATOR_DEST_OVER)
+    cr.set_source_rgb(1.0, 1.0, 1.0)
+    cr.paint()
+
+    if options and options.get(":render/usecolors", None):
+        image_recolor(surface, options.get(":render/foreground"), options.get(":render/background"), options.get(":render/usecolors", None))
+
+    return surface
+
+def image_write_print_response (surface):
+    surface.flush()
+    with NamedTemporaryFile(prefix="epdfinfo", delete=False) as f:
+        surface.write_to_png(f)
+    return format_response(f.name)
+
+
+def normalize_page_arg(pdf, first, last):
+    first = max(1, first)
+    if last <= 0:
+        last = pdf.get_n_pages()
+    else:
+        last = min(last, pdf.get_n_pages())
+    return first, last
+
+def xpoppler_validate_selection_style(selection_style):
+    try:
+        return Poppler.SelectionStyle(selection_style)
+    except ValueError:
+        return Poppler.SelectionStyle.GLYPH
+
+def xpoppler_action_type_string(type):
+    name = type.value_nick
+    if name == 'named':
+        return 'goto-dest'
+    else:
+        return name
+
+def action_print_destination(pdf, action):
+    if action.type is Poppler.ActionType.GOTO_DEST and action.goto_dest.dest.type is Poppler.DestType.NAMED:
+        dest = pdf.find_dest(action.goto_dest.dest.named_dest)
+    elif action.type is Poppler.ActionType.NAMED:
+        dest = pdf.find_dest(action.named.named_dest)
+    elif action.type is Poppler.ActionType.GOTO_REMOTE:
+        yield action.goto_remote.file_name
+        dest = action.goto_remote.dest
+    elif action.type is Poppler.ActionType.GOTO_DEST:
+        dest = action.goto_dest.dest
+    else:
+        dest = None
+
+    last = None
+    if ((not dest)
+        or (dest.type is Poppler.DestType.UNKNOWN)
+        or (dest.page_num < 1)
+        or (dest.page_num > pdf.get_n_pages())):
+        yield None
+    else:
+        yield dest.page_num
+        if action.type is not Poppler.ActionType.GOTO_REMOTE:
+            page = pdf.get_page(dest.page_num - 1)
+            if page:
+                size = page.get_size()
+                top = (size.height - dest.top) / size.height
+                if dest.type is Poppler.DestType.XYZ:
+                    if dest.change_top:
+                        last = top
+                elif dest.type in (
+                        Poppler.DestType.FIT,
+                        Poppler.DestType.FITB,
+                        Poppler.DestType.FITH,
+                        Poppler.DestType.FITBH):
+                    last = 0
+                elif dest.type in (
+                        Poppler.DestType.FITV,
+                        Poppler.DestType.FITBV,
+                        Poppler.DestType.FITR):
+                    last = top
+    yield last
+
+def action_is_handled(action):
+    if action is None:
+        return False
+    return action.type in (
+        Poppler.ActionType.GOTO_REMOTE,
+        Poppler.ActionType.GOTO_DEST,
+        Poppler.ActionType.NAMED,
+        Poppler.ActionType.URI)
+
+def action_print(pdf, action):
+    if not action_is_handled(action):
+        return
+    yield xpoppler_action_type_string(action.type)
+    yield action.any.title
+    if action.type in (
+            Poppler.ActionType.GOTO_REMOTE,
+            Poppler.ActionType.GOTO_DEST,
+            Poppler.ActionType.NAMED):
+        yield from action_print_destination(pdf, action)
+    elif action.type is Poppler.ActionType.LAUNCH:
+        yield action.launch.file_name
+        yield action.launch.params
+    elif action.type is Poppler.ActionType.URI:
+        yield action.uri.uri
+
+def annotation_get_for_page(doc, pn):
+    npages = doc.pdf.get_n_pages()
+    if pn < 1 or pn > npages:
+        return
+
+    if doc.annotation_pages is None:
+        doc.annotation_pages = [None for _ in range(npages)]
+
+    if doc.annotation_pages[pn - 1] is not None:
+        return doc.annotation_pages[pn - 1]
+
+    if doc.annotation_keys is None:
+        doc.annotation_keys = {}
+
+    page = doc.pdf.get_page(pn-1)
+    if not page:
+        return
+
+    result = []
+
+    for i, item in enumerate(page.get_annot_mapping()):
+        key = f'annot-{pn}-{i}'
+        a = (key, item)
+        result.append(a)
+        doc.annotation_keys[key] = a
+    doc.annotation_pages[pn-1] = result
+    return result
+
+def annotation_get_by_key(doc, key):
+    if doc.annotation_keys is None:
+        return
+    return doc.annotation_keys.get(key, None)
+
+def xpoppler_annot_type_string(type):
+    if type is Poppler.AnnotType.FILE_ATTACHMENT:
+        return 'file'
+    else:
+        return type.value_nick
+
+def region_print(region, width, height):
+    n = region.num_rectangles()
+    if n:
+        for i in range(n):
+            r = region.get_rectangle(i)
+            yield f"{r.x / width} {r.y / height} {(r.x + r.width) / width} {(r.y + r.height) / height}"
+    else:
+        yield "0.0 0.0 0.0 0.0"
+
+def annotation_print(annot, page):
+    key = annot[0]
+    m = annot[1]
+    a = m.annot
+    size = page.get_size()
+
+    r = Poppler.Rectangle.new()
+    r.x1 = m.area.x1
+    r.x2 = m.area.x2
+    r.y1 = size.height - m.area.y2
+    r.y2 = size.height - m.area.y1
+
+    yield page.get_index() + 1
+    yield f"{r.x1/size.width} {r.y1/size.height} {r.x2/size.width} {r.y2/size.height}"
+    yield xpoppler_annot_type_string(a.get_annot_type())
+    yield key
+    yield int(a.get_flags())
+    color = a.get_color()
+    if color:
+        yield f'#{color.red>>8:02x}{color.green>>8:02x}{color.blue>>8:02x}'
+    else:
+        yield None
+    yield a.get_contents()
+    yield a.get_modified()
+
+    if not isinstance(a, Poppler.AnnotMarkup):
+        return
+
+    yield a.get_label()
+    yield a.get_subject()
+    yield a.get_opacity()
+    if a.has_popup():
+        tmp = r.y1
+        r.y1 = size.height - r.y2
+        r.y2 = size.height - tmp
+        r = a.get_popup_rectangle().poppler_rect
+        yield f"{r.x1 / size.width} {r.y1 / size.height} {r.x2 / size.width} {r.y2 / size.height}"
+        yield 1 if a.get_popup_is_open() else 0
+    else:
+        yield None
+        yield None
+
+    d = a.get_date()
+    if d:
+        yield date.fromordinal(d.get_julian()).strftime("%x")
+    else:
+        yield None
+
+    if isinstance(a, Poppler.AnnotText):
+        yield a.get_icon()
+        yield a.get_state().value_nick
+        yield int(a.get_is_open())
+
+def attachment_print(att, id, do_save):
+    yield id
+    yield att.name
+    yield att.description
+    if att.size != GLib.MAXSIZE:
+        yield att.size
+    else:
+        yield -1
+
+    if att.mtime > 0:
+        yield datetime.fromtimestamp(att.mtime).strftime("%c")
+    else:
+        yield None
+
+    if att.ctime > 0:
+        yield datetime.fromtimestamp(att.ctime).strftime("%c")
+    else:
+        yield None
+
+    if att.checksum:
+        yield att.checksum.str
+    else:
+        yield None
+
+    if do_save:
+        with NamedTemporaryFile(prefix="epdfinfo", delete=False) as f:
+            def callback(buf, size):
+                f.write(buf)
+                return True
+            try:
+                att.save_to_callback(callback)
+            except GLib.GError as e:
+                assert False, f"Writing attachment failed: {e.message}"
+        yield f.name
+    else:
+        yield None
+
+documents = {}
+
+def document_open(filename, password=None):
+    doc = documents.get(filename, None)
+    if doc is not None:
+        return doc
+    doc = Document(filename, password)
+    documents[filename] = doc
+    return doc
+
+def parse_rectangle(s):
+    t = tuple(float(c) for c in s.split(' ', 3))
+    if len(t) != 4:
+        raise ValueError()
+    r = Poppler.Rectangle.new()
+    r.x1, r.y1, r.x2, r.y2 = t
+    return r
+
+def arg_doc(arg):
+    try:
+        return document_open(arg)
+    except GLib.GError as e:
+        assert False, e.message
+
+def arg_bool(arg):
+    assert arg in "01", f"Expected 0 or 1: {arg}"
+    return arg == "1"
+
+def arg_nonempty_string(arg):
+    assert arg, "Non-empty string expected"
+    return arg
+
+def arg_string(arg):
+    return arg
+
+def arg_natnum(arg):
+    try:
+        n = int(arg)
+        if n >= 0:
+            return n
+    except ValueError:
+        pass
+    assert False, f"Expected natural number: {arg}"
+
+def arg_edges_or_position(arg):
+    try:
+        r = parse_rectangle(arg)
+    except ValueError:
+        pass
+    else:
+        if (0 <= r.x1 <= 1) and (r.x2 <= 1) and (0 <= r.y1 <= 1) and (r.y2 <= 1):
+            return r
+    assert False, f"Expected a relative position of rectangle: {arg}"
+
+def arg_edges(arg):
+    try:
+        r = parse_rectangle(arg)
+    except ValueError:
+        pass
+    else:
+        if (0 <= r.x1 <= 1) and (0 <= r.x2 <= 1) and (0 <= r.y1 <= 1) and (0 <= r.y2 <= 1):
+            return r
+    assert False, f"Expected a relative rectangle: {arg}"
+
+def arg_edge_or_negative(arg):
+    try:
+        n = float(arg)
+    except ValueError:
+        pass
+    else:
+        if n <= 1.0:
+            return n
+    assert False, f"Expected a relative edge: {arg}"
+
+def arg_edge(arg):
+    try:
+        n = float(arg)
+    except ValueError:
+        pass
+    else:
+        if 0.0 <= n <= 1.0:
+            return n
+    assert False, f"Expected a relative edge: {arg}"
+
+
+def arg_color(arg):
+    if len(arg) == 7 and arg[0] == '#':
+        try:
+            rgb = int.from_bytes(bytes.fromhex(arg[1:]))
+        except ValueError:
+            pass
+        else:
+            c = Poppler.Color.new()
+            r = rgb >> 16
+            g = (rgb >> 8) & 0xFF
+            b = (rgb & 0xFF)
+            c.red = r << 8
+            c.green = g << 8
+            c.blue = b << 8
+            return c
+    assert False, f"Invalid color: {arg}"
+
+def command_arg_print(t, arg):
+    if t is arg_doc:
+        return arg.filename
+    elif t is arg_bool:
+        return "{}".format(1 if arg else 0)
+    elif t in (arg_nonempty_string, arg_string):
+        return arg
+    elif t in (arg_edge_or_negative, arg_edge):
+        return f"{arg}"
+    elif t in (arg_edges_or_position, arg_edges):
+        if arg.x2 < 0 and arg.y2 < 0:
+            return f"{r.x1} {r.y1}"
+        return f"{r.x1} {r.y1} {r.x2} {r.y2}"
+    elif t is arg_color:
+        return f"#{arg.red>>8:02x}{arg.green>>8:02x}{arg.blue>>8:02x}"
+
+
+commands = {}
+
+def format_response(*args):
+    return ':'.join(
+        re.sub(r'\n|\\|:', response_escape_repl, str('' if a is None else a))
+        for a in args)
+
+def dec_cmd(func):
+    commands[func.__name__[4:].replace("_", "-")] = func
+    return func
+
+@dec_cmd
+def cmd_ping(msg: arg_string):
+    yield format_response(msg)
+
+@dec_cmd
+def cmd_features():
+    yield format_response(
+        'case-sensitive-search' if HAVE_POPPLER_FIND_OPTS else 'no-case-sensitive-search',
+        'no-writable-annotations',
+        'no-markup-annotations')
+
+@dec_cmd
+def cmd_open(filename: arg_nonempty_string, password: arg_string):
+    try:
+        document_open(filename, password or None)
+    except GLib.GError as e:
+        assert False, f"Error opening {filename}:{e.message}"
+
+@dec_cmd
+def cmd_close(filename: arg_nonempty_string):
+    doc = documents.pop(filename, None)
+    yield format_response('1' if doc else '0')
+
+@dec_cmd
+def cmd_quit():
+    quit()
+
+document_options = {
+    ":render/usecolors": arg_natnum,
+    ":render/printed": arg_bool,
+    ":render/foreground": arg_color,
+    ":render/background": arg_color,
+}
+
+@dec_cmd
+def cmd_getoptions(doc: arg_doc):
+    for name, t in document_options.items():
+        opt = doc.options.get(name, None)
+        yield format_response(name, None if opt is None else command_arg_print(t, opt) )
+
+@dec_cmd
+def cmd_setoptions(doc: arg_doc, *rest):
+    assert len(rest) % 2 == 0, "Even number of key/value pairs expected"
+    options = {}
+    for key, value in zip(rest[0::2], rest[1::2]):
+        key = arg_nonempty_string(key)
+        t = document_options.get(key, None)
+        assert t is not None, f"Unknown option: {key}"
+        options[key] = t(value)
+    doc.options = options
+    yield from cmd_getoptions(doc)
+
+
+@dec_cmd
+def cmd_search_string(doc: arg_doc, first: arg_natnum, last: arg_natnum, string: arg_nonempty_string, ignore_case: arg_bool):
+    pdf = doc.pdf
+    if HAVE_POPPLER_FIND_OPTS:
+        flags = 0 if ignore_case else Poppler.FindFlags.CASE_SENSITIVE
+    else:
+        flags = 0
+
+    first, last = normalize_page_arg(pdf, first, last)
+
+    for pn in range(first, last+1):
+        page = pdf.get_page(pn-1)
+        if not page:
+            continue
+        if HAVE_POPPLER_FIND_OPTS:
+            items = page.find_text_with_options(string, flags)
+        else:
+            items = page.find_text(string)
+
+        size = page.get_size()
+        for r in items:
+            y1 = r.y1
+            r.y1 = size.height - r.y2
+            r.y2 = size.height - y1
+            line = page.get_selected_text(Poppler.SelectionStyle.LINE, r).removesuffix('\n')
+            m = page.get_selected_text(Poppler.SelectionStyle.GLYPH, r).removesuffix('\n')
+            yield format_response(
+                pn, m, line,
+                f'{r.x1 / size.width} {r.y1 / size.height} {r.x2 / size.width} {r.y2 / size.height}')
+
+
+@dec_cmd
+def cmd_search_regexp(doc: arg_doc, first: arg_natnum, last: arg_natnum, regexp: arg_nonempty_string, cflags: arg_natnum, mflags: arg_natnum):
+    pdf = doc.pdf
+    first, last = normalize_page_arg(pdf, first, last)
+    try:
+        regex = GLib.Regex.new(regexp, GLib.RegexCompileFlags(cflags | GLib.RegexCompileFlags.RAW), GLib.RegexMatchFlags(mflags))
+    except GLib.GError as e:
+        assert False, f'Invalid regexp: {e.message}'
+
+    for pn in range(first, last+1):
+        page = pdf.get_page(pn-1)
+        if not page:
+            continue
+        text = page.get_text()
+        rectangles = page.get_text_layout().rectangles
+        size = page.get_size()
+
+        info = regex.match(page.get_text(), 0).match_info
+        while info.matches():
+            pos = info.fetch_pos(0)
+            start = GLib.utf8_strlen(text, pos.start_pos)
+            end = GLib.utf8_strlen(text, pos.end_pos)
+            line = page.get_selected_text(Poppler.SelectionStyle.LINE, rectangles[start])
+
+            region = cairo.Region()
+            for i in range(start, end):
+                r = rectangles[i]
+                c = cairo.RectangleInt()
+                c.x = int(100.0*r.x1 + 0.5)
+                c.y = int(100.0*r.y1 + 0.5)
+                c.width = int(100.0 * (r.x2 - r.x1) + 0.5)
+                c.height = int(100.0 * (r.y2 - r.y1) + 0.5)
+                region.union(c)
+            yield format_response(
+                pn, text[start:end], line,
+                *region_print(region, size.width*100.0, size.height*100.0))
+            info.next()
+
+@dec_cmd
+def cmd_regexp_flags():
+    yield format_response("caseless", int(GLib.RegexCompileFlags.CASELESS))
+    yield format_response("multiline", int(GLib.RegexCompileFlags.MULTILINE))
+    yield format_response("dotall", int(GLib.RegexCompileFlags.DOTALL))
+    yield format_response("extended", int(GLib.RegexCompileFlags.EXTENDED))
+    yield format_response("anchored", int(GLib.RegexCompileFlags.ANCHORED))
+    yield format_response("dollar-endonly", int(GLib.RegexCompileFlags.DOLLAR_ENDONLY))
+    yield format_response("ungreedy", int(GLib.RegexCompileFlags.UNGREEDY))
+    yield format_response("raw", int(GLib.RegexCompileFlags.RAW))
+    yield format_response("no-auto-capture", int(GLib.RegexCompileFlags.NO_AUTO_CAPTURE))
+    yield format_response("optimize", int(GLib.RegexCompileFlags.OPTIMIZE))
+    yield format_response("dupnames", int(GLib.RegexCompileFlags.DUPNAMES))
+    yield format_response("newline-cr", int(GLib.RegexCompileFlags.NEWLINE_CR))
+    yield format_response("newline-lf", int(GLib.RegexCompileFlags.NEWLINE_LF))
+    yield format_response("newline-crlf", int(GLib.RegexCompileFlags.NEWLINE_CRLF))
+
+    yield format_response("match-anchored", int(GLib.RegexMatchFlags.ANCHORED))
+    yield format_response("match-notbol", int(GLib.RegexMatchFlags.NOTBOL))
+    yield format_response("match-noteol", int(GLib.RegexMatchFlags.NOTEOL))
+    yield format_response("match-notempty", int(GLib.RegexMatchFlags.NOTEMPTY))
+    yield format_response("match-partial", int(GLib.RegexMatchFlags.PARTIAL))
+    yield format_response("match-newline-cr", int(GLib.RegexMatchFlags.NEWLINE_CR))
+    yield format_response("match-newline-lf", int(GLib.RegexMatchFlags.NEWLINE_LF))
+    yield format_response("match-newline-crlf", int(GLib.RegexMatchFlags.NEWLINE_CRLF))
+    yield format_response("match-newline-any", int(GLib.RegexMatchFlags.NEWLINE_ANY))
+
+
+def format_date(dt):
+    return datetime.fromtimestamp(dt.to_unix()).strftime("%c")
+    # return "" if dt is None else str(datetime.fromtimestamp(dt.to_unix(), timezone(timedelta(microseconds=dt.get_utc_offset()))))
+
+@dec_cmd
+def cmd_metadata(doc: arg_doc):
+    pdf = doc.pdf
+    yield format_response(
+        pdf.get_title(),
+        pdf.get_author(),
+        pdf.get_subject(),
+        pdf.get_keywords(),
+        pdf.get_creator(),
+        pdf.get_producer(),
+        pdf.get_pdf_version_string(),
+        format_date(pdf.get_creation_date_time()),
+        format_date(pdf.get_modification_date_time()))
+
+
+def cmd_outline_walk(pdf, it, depth):
+    while True:
+        action = it.get_action()
+        if not action:
+            continue
+
+        if action_is_handled(action):
+            yield format_response(f"{depth}", *action_print(pdf, action))
+
+        child = it.get_child()
+        if child:
+            yield from cmd_outline_walk(pdf, child, depth + 1)
+        if not it.next():
+            break
+
+
+@dec_cmd
+def cmd_outline(doc: arg_doc):
+    pdf = doc.pdf
+    try:
+        it = Poppler.IndexIter.new(pdf)
+    except TypeError:
+        pass
+    else:
+        yield from cmd_outline_walk(pdf, it, 1)
+
+@dec_cmd
+def cmd_number_of_pages(doc: arg_doc):
+    n = doc.pdf.get_n_pages()
+    yield format_response(n)
+
+@dec_cmd
+def cmd_pagelinks(doc: arg_doc, pn: arg_natnum):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+    for link in reversed(page.get_link_mapping()):
+        if not action_is_handled(link.action):
+            continue
+
+        r = link.area
+        y1 = r.y1
+        r.y1 = size.height - r.y2
+        r.y2 = size.height - y1
+        yield format_response(
+            f'{r.x1 / size.width} {r.y1 / size.height} {r.x2 / size.width} {r.y2 / size.height}',
+            *action_print(pdf, link.action))
+
+@dec_cmd
+def cmd_gettext(doc: arg_doc, pn: arg_natnum, r: arg_edges, selection_style: arg_natnum):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+    r.x1 = r.x1 * size.width
+    r.x2 = r.x2 * size.width
+    r.y1 = r.y1 * size.height
+    r.y2 = r.y2 * size.height
+    text = page.get_selected_text(selection_style, r)
+    yield format_response(text)
+
+@dec_cmd
+def cmd_getselection(doc: arg_doc, pn: arg_natnum, r: arg_edges, selection_style: arg_natnum):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+    selection_style = xpoppler_validate_selection_style(selection_style)
+    r.x1 = r.x1 * size.width
+    r.x2 = r.x2 * size.width
+    r.y1 = r.y1 * size.height
+    r.y2 = r.y2 * size.height
+
+    region = page.get_selected_region(1.0, selection_style, r)
+    for i in range(region.num_rectangles()):
+        r = region.get_rectangle(i)
+        yield format_response(
+            f'{r.x / size.width} {r.y / size.height} {(r.x + r.width) / size.width} {(r.y + r.height) / size.height}')
+
+@dec_cmd
+def cmd_pagesize(doc: arg_doc, pn: arg_natnum):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+    yield format_response(size.width, size.height)
+
+@dec_cmd
+def cmd_boundingbox(doc: arg_doc, pn: arg_natnum):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+
+    bbox = Poppler.Rectangle.new()
+
+    surface = image_render_page(pdf, page, size.width, 1, doc.options)
+    width = surface.get_width()
+    height = surface.get_height()
+    data = surface.get_data().cast('I', (height, width))
+
+    pixel = data[0,0]
+
+    for i in range(width):
+        for j in range(height):
+            if data[j,i] != pixel:
+                break
+        else:
+            continue
+        break
+    else:
+        i += 1
+    bbox.x1 = i
+
+    for i in range(width-1, -1, -1):
+        for j in range(height):
+            if data[j,i] != pixel:
+                break
+        else:
+            continue
+        break
+    else:
+        i-=1
+    bbox.x2 = i+1
+
+    for j in range(height):
+        for i in range(width):
+            if data[j,i] != pixel:
+                break
+        else:
+            continue
+        break
+    else:
+        j+=1
+    bbox.y1 = j
+
+    for j in range(height-1,-1,-1):
+        for i in range(width):
+            if data[j,i] != pixel:
+                break
+        else:
+            continue
+        break
+    else:
+        j-=1
+    bbox.y2 = j+1
+
+    if (bbox.x1 >= bbox.x2) or (bbox.y1 >= bbox.y2):
+        yield format_response("0", "0", "1", "1")
+    else:
+        yield format_response(bbox.x1/width, bbox.y1/height, bbox.x2/width, bbox.y2/height)
+
+
+@dec_cmd
+def cmd_charlayout(doc: arg_doc, pn: arg_natnum, region: arg_edges_or_position):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+    text = page.get_text()
+
+    have_position = region.y2 < 0
+
+    for c, r in zip(page.get_text(), page.get_text_layout().rectangles):
+        if have_position:
+            if region.x1 < r.x1: continue
+            if region.x1 > r.x2: continue
+            if region.y1 < r.y1: continue
+            if region.y1 > r.y2: continue
+        else:
+            if r.x1 < region.x1: continue
+            if r.y1 < region.y1: continue
+            if r.x1 > region.x2: continue
+            if r.y2 > region.y2: continue
+
+        yield format_response(
+            f'{r.x1 / size.width} {r.y1 / size.height} {r.x2 / size.width} {r.y2 / size.height}', c)
+
+@dec_cmd
+def cmd_pagelabels(doc: arg_doc):
+    pdf = doc.pdf
+    for i in range(pdf.get_n_pages()):
+        page = pdf.get_page(i)
+        label = page.get_label()
+        yield format_response(label)
+
+@dec_cmd
+def cmd_getannots(doc: arg_doc, first: arg_natnum, last: arg_natnum):
+    pdf = doc.pdf
+    first, last = normalize_page_arg(pdf, first, last)
+    for pn in range(first, last+1):
+        page = pdf.get_page(pn-1)
+        if not page:
+            continue
+
+        for annot in annotation_get_for_page(doc, pn):
+            yield format_response(*annotation_print(annot, page))
+
+@dec_cmd
+def cmd_getannot(doc: arg_doc, key: arg_nonempty_string):
+    a = annotation_get_by_key(doc, key)
+    assert a is not None, f"No such annotation: {key}"
+    index = a[1].annot.get_page_index()
+    page = None
+    if index >= 0:
+        page = doc.pdf.get_page(index)
+    assert page is not None, f"Unable to get page {index+1}"
+    yield format_response(*annotation_print(a, page))
+
+@dec_cmd
+def cmd_getattachment_from_annot(doc: arg_doc, key: arg_nonempty_string, do_save: arg_bool):
+    a = annotation_get_by_key(doc, key)
+    assert a is not None, f"No such annotation: {key}"
+    annot = a[1].annot
+    assert isinstance(annot, Poppler.AnnotFileAttachment), f"Not a file annotation: {key}"
+    att = annot.get_attachment()
+    assert att is not None, f"Unable to get attachment: {key}"
+    id = f"attachment-{key}"
+    yield format_response(*attachment_print(att, id, do_save))
+
+@dec_cmd
+def cmd_renderpage(doc: arg_doc, pn: arg_natnum, width: arg_natnum, *rest):
+    pdf = doc.pdf
+    page = pdf.get_page(pn - 1)
+    assert page is not None, f"No such page {pn}"
+    size = page.get_size()
+    surface = image_render_page(pdf, page, width, 1, doc.options)
+    assert surface is not None, f"Failed to render page {pn}"
+
+    cr = cairo.Context(surface)
+    cr.scale(width / size.width, width / size.width)
+    fg = Poppler.Color.new()
+    fg.red, fg.green, fg.blue = 0, 0, 0
+    bg = Poppler.Color.new()
+    bg.red, bg.green, bg.blue = 65535, 0, 0
+    alpha = 1.0
+    line_width = 1.5
+    selection_style = Poppler.SelectionStyle.GLYPH
+    cb = Poppler.Rectangle.new()
+    cb.x1, cb.y1, cb.x2, cb.y2 = 0.0, 0.0, 1.0, 1.0
+
+    rest = list(rest)
+
+    while rest:
+        keyword = rest.pop(0)
+        assert rest, f"Keyword is `{keyword}' missing an argument"
+
+        if keyword == ':foreground':
+            fg = arg_color(rest.pop(0))
+        elif keyword == ':background':
+            bg = arg_color(rest.pop(0))
+        elif keyword == ':alpha':
+            alpha = arg_edge(rest.pop(0))
+        elif keyword == ':crop-to':
+            r = arg_edges(rest.pop(0))
+            w = cb.x2 - cb.x1
+            h = cb.y2 - cb.y1
+            x1 = cb.x1
+            y1 = cb.y1
+            cb.x1 = r.x1 * w + x1
+            cb.x2 = r.x2 * w + x1
+            cb.y1 = r.y1 * h + y1
+            cb.y2 = r.y2 * h + y1
+        elif keyword == ':highlight-region':
+            r = arg_edges(rest.pop(0))
+            r.x1 = size.width * r.x1 * (cb.x2 - cb.x1) + size.width * cb.x1
+            r.x2 = size.width * r.x2 * (cb.x2 - cb.x1) + size.width * cb.x1
+            r.y1 = size.height * r.y1 * (cb.y2 - cb.y1) + size.height * cb.y1
+            r.y2 = size.height * r.y2 * (cb.y2 - cb.y1) + size.height * cb.y1
+            deg = pi/180.0
+
+            r.x1 += line_width/2
+            r.x2 -= line_width/2
+            r.y1 += line_width/2
+            r.y2 -= line_width/2
+            rad = min(5, min(r.x2-r.x1, r.y2-r.y1) / 2)
+            cr.move_to(r.x1, r.y1+rad)
+            cr.arc(r.x1+rad, r.y1+rad, rad, 180*deg, 270*deg)
+            cr.arc(r.x2-rad, r.y1+rad, rad, 270*deg, 360*deg)
+            cr.arc(r.x2-rad, r.y2-rad, rad, 0*deg, 90*deg)
+            cr.arc(r.x1+rad, r.y2-rad, rad, 90*deg, 180*deg)
+            cr.close_path()
+            cr.set_source_rgba(bg.red/65535.0, bg.green/65535.0, bg.blue/65535.0, alpha)
+            cr.fill_preserve()
+            cr.set_source_rgba(fg.red/65535.0, fg.green/65535.0, fg.blue/65535.0, alpha)
+            cr.set_line_width(line_width)
+            cr.stroke()
+
+        elif keyword == ':highlight-text':
+            r = arg_edges(rest.pop(0))
+            r.x1 = size.width * r.x1 * (cb.x2 - cb.x1) + size.width * cb.x1
+            r.x2 = size.width * r.x2 * (cb.x2 - cb.x1) + size.width * cb.x1
+            r.y1 = size.height * r.y1 * (cb.y2 - cb.y1) + size.height * cb.y1
+            r.y2 = size.height * r.y2 * (cb.y2 - cb.y1) + size.height * cb.y1
+            page.render_selection(cr, r, Poppler.Rectangle.new(), selection_style, fg, bg)
+        elif keyword == ':highlight-line':
+            r = arg_edges(rest.pop(0))
+            r.x1 = size.width * r.x1 * (cb.x2 - cb.x1) + size.width * cb.x1
+            r.x2 = size.width * r.x2 * (cb.x2 - cb.x1) + size.width * cb.x1
+            r.y1 = size.height * r.y1 * (cb.y2 - cb.y1) + size.height * cb.y1
+            r.y2 = size.height * r.y2 * (cb.y2 - cb.y1) + size.height * cb.y1
+            m = r.y1 + (r.y2 - r.y1) / 2
+            r.y1 = m
+            r.y2 = m
+            page.render_selection(cr, r, Poppler.Rectangle.new(), selection_style, fg, bg)
+
+        elif keyword == ':selection-style':
+            selection_style = xpoppler_validate_selection_style(arg_natnum(rest.pop(0)))
+        else:
+            assert False, f"Unknown render command: {keyword}"
+
+    if (cb.x1 != 0) or (cb.y1 != 0) or (cb.x2 != 1) or (cb.y2 != 1):
+        height = surface.get_height()
+        x, y, width, height = int(width * cb.x1 + 0.5), int(height * cb.y1 + 0.5), int(width * (cb.x2 - cb.x1) + 0.5), int(height * (cb.y2 - cb.y1) + 0.5)
+        nsurface = ImageSurface(cairo.FORMAT_ARGB32, width, height)
+        assert nsurface is not None, "Failed to create cairo surface"
+        cr = cairo.Context(nsurface)
+        assert cr is not None, "Failed to create cairo context"
+        cr.set_source_surface(surface, -x, -y)
+        cr.paint()
+        surface = nsurface
+
+    yield image_write_print_response(surface)
+
+
+def main():
+    for line in sys.stdin:
+        line = line[:-1]
+        if not line:
+            continue
+
+        args = [re.sub(r'\\.', arg_escape_repl, arg)
+                for arg in re.split(r'(?<!\\):', line)]
+
+        if len(args) == 0:
+            continue
+
+        command = commands.get(args[0], None)
+
+        if command is None:
+            print_error_response("Unknown command: {}", args[0])
+        else:
+            sig = signature(command)
+            ba = sig.bind(*args[1:])
+
+            try:
+                for p in sig.parameters.values():
+                    if p.annotation is _empty:
+                        continue
+                    ba.arguments[p.name] = p.annotation(ba.arguments[p.name])
+                result = command(*ba.args, **ba.kwargs) or ()
+                result = list(result)
+            except AssertionError as e:
+                print_error_response("{}", str(e))
+            else:
+                print("OK")
+                for line in result:
+                    print(line)
+                print(".", flush=True)
+
+
+if __name__ == '__main__':
+    if len(sys.argv) > 2:
+        print("usage: epdfinfo [ERROR-LOGFILE]", file=sys.stderr)
+        exit(1)
+    if len(sys.argv) == 2:
+        from traceback import print_exc
+        from contextlib import redirect_stderr
+        with open(sys.argv[1], 'a') as f:
+            with redirect_stderr(f):
+                try:
+                    main()
+                finally:
+                    print_exc()
+                    f.flush()
+    else:
+        main()
