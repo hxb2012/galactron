@@ -27,7 +27,8 @@
 (package-install-file (file-name-directory buffer-file-name))
 (let ((dirname (package-desc-dir
                 (car (assoc-default 'galactron package-alist)))))
-  (copy-file "epdfinfo" (file-name-concat dirname "epdfinfo") t))
+  (dolist (name '("epdfinfo" "evpdfinfo"))
+    (copy-file name (file-name-concat dirname name) t)))
 (restart-emacs)
 #+END_SRC
 
@@ -1008,14 +1009,26 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
 
 #+BEGIN_SRC emacs-lisp
 (defcustom galactron-pdf-enabled-python-server t
-  "Python Server"
-  :type 'boolean
+  "Python Server
+
+- epdfinfo
+  使用Poppler
+- evpdfinfo
+  使用Evince"
+  :type '(choice
+          (const :tag "epdfinfo" t)
+          (const :tag "evpdfinfo" evpdfinfo)
+          (const :tag "禁用" nil))
   :tag "Python Server")
 
 (when galactron-pdf-enabled-python-server
-  (galactron-default pdf-info-epdfinfo-program
-                  (file-name-concat
-                   (file-name-directory load-file-name) "epdfinfo")))
+  (galactron-default
+   pdf-info-epdfinfo-program
+   (file-name-concat
+    (file-name-directory load-file-name)
+    (pcase galactron-pdf-enabled-python-server
+      ('evpdfinfo "evpdfinfo")
+      (_ "epdfinfo")))))
 #+END_SRC
 
 *** [[elisp:(customize-group 'galactron-nov)][Nov]] (请先[[elisp:(package-install 'nov)][安装nov]])
