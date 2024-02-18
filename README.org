@@ -1089,7 +1089,7 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   :tag "PDF-Tools")
 
 (when galactron-largefile-enabled-pdf
-  (galactron-with-package-installed pdf-tools
+  (galactron-when-package-installed pdf-tools
     (dolist (item auto-mode-alist)
       (when (equal
              (cdr item)
@@ -1108,7 +1108,7 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   :tag "Nov")
 
 (when galactron-largefile-enabled-nov
-  (galactron-with-package-installed nov
+  (galactron-when-package-installed nov
     (dolist (item auto-mode-alist)
       (when (eq (cdr item) 'nov-mode)
         (add-to-list 'largefile-mode-alist item)))))
@@ -1123,7 +1123,7 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   :tag "Djvu")
 
 (when galactron-largefile-enabled-djvu
-  (galactron-with-package-installed djvu
+  (galactron-when-package-installed djvu
     (dolist (item auto-mode-alist)
       (when (eq (cdr item) 'djvu-init-mode)
         (add-to-list 'largefile-mode-alist item)))))
@@ -1444,8 +1444,7 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
 
 (when (and galactron-flatpak-enabled-pdf
            (equal (getenv "container") "flatpak"))
-
-  (galactron-with-package-installed pdf-tools
+  (galactron-when-package-installed pdf-tools
     (dolist (fun
              '(pdf-info-check-epdfinfo
                pdf-util-convert
@@ -1469,7 +1468,7 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
 
 (when (and galactron-flatpak-enabled-djvu
            (equal (getenv "container") "flatpak"))
-  (galactron-with-package-installed djvu
+  (galactron-when-package-installed djvu
     (dolist (item
              '((djvu-djvused . "djvused")
                (djvu-image . "ddjvu")
@@ -1993,28 +1992,39 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
          (format "Do you want to install '%s' now?" package))
     (package-install package)))
 
-(defun galactron--find-file (file-name)
-  (interactive)
-  (let ((org-file (file-name-with-extension file-name ".org")))
-    (if (file-exists-p org-file)
-        (find-file org-file)
-      (find-file (file-name-with-extension file-name ".el")))))
+(defun galactron--find-location (location)
+  (when (file-exists-p (car location))
+    (find-file (car location))
+    (goto-char (cdr location))))
 
-(defmacro galactron-with-package-installed (package &rest body)
+(defmacro galactron-when-package-installed (package &rest body)
   (declare (indent 1) (debug (form body)))
-  (unless (package-installed-p package)
-    (galactron--with-messages
-      (insert
-       (concat
-        "由于未"
-        (buttonize (format "安装%S" package)
-                   'galactron--package-install package)
-        "，部分配置未生效，"
-        (buttonize "查看详情" 'galactron--find-file load-file-name)
-        "\n"))))
   (let ((autoloads (intern (format "%s-autoloads" package))))
     `(with-eval-after-load ',autoloads
        ,@body)))
+
+(defmacro galactron-with-package-installed (package &rest body)
+  (declare (indent 1) (debug (form body)))
+  (let ((file (or byte-compile-current-file load-file-name))
+        (pos (with-current-buffer
+                 (or byte-compile-current-buffer
+                     (car eval-buffer-list))
+             (save-excursion
+               (backward-list)
+               (point)))))
+    `(progn
+       (unless (package-installed-p ',package)
+         (galactron--with-messages
+           (insert
+            (concat
+             "由于未"
+             (buttonize (format "安装%S" ',package)
+                        'galactron--package-install ',package)
+             "，部分配置未生效，"
+             (buttonize "查看详情" 'galactron--find-location
+                        (cons ,file ,pos))
+             "\n"))))
+       (galactron-when-package-installed ,package ,@body))))
 #+END_SRC
 
 ** 启动过程
