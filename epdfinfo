@@ -576,7 +576,7 @@ def cmd_search_regexp(doc: arg_doc, first: arg_natnum, last: arg_natnum, regexp:
     pdf = doc.pdf
     first, last = normalize_page_arg(pdf, first, last)
     try:
-        regex = GLib.Regex.new(regexp, GLib.RegexCompileFlags(cflags | GLib.RegexCompileFlags.RAW), GLib.RegexMatchFlags(mflags))
+        regex = GLib.Regex.new(regexp, GLib.RegexCompileFlags(cflags), GLib.RegexMatchFlags(mflags))
     except GLib.GError as e:
         assert False, f'Invalid regexp: {e.message}'
 
@@ -588,11 +588,12 @@ def cmd_search_regexp(doc: arg_doc, first: arg_natnum, last: arg_natnum, regexp:
         rectangles = page.get_text_layout().rectangles
         size = page.get_size()
 
-        info = regex.match(page.get_text(), 0).match_info
+        offset = 0
+        info = regex.match(text[offset:], 0).match_info
         while info.matches():
             pos = info.fetch_pos(0)
-            start = GLib.utf8_strlen(text, pos.start_pos)
-            end = GLib.utf8_strlen(text, pos.end_pos)
+            start = GLib.utf8_strlen(text, offset+pos.start_pos)
+            end = GLib.utf8_strlen(text, offset+pos.end_pos)
             line = page.get_selected_text(Poppler.SelectionStyle.LINE, rectangles[start])
 
             region = cairo.Region()
@@ -607,7 +608,8 @@ def cmd_search_regexp(doc: arg_doc, first: arg_natnum, last: arg_natnum, regexp:
             yield format_response(
                 pn, text[start:end], line,
                 *region_print(region, size.width*100.0, size.height*100.0))
-            info.next()
+            offset += pos.end_pos
+            info = regex.match(text[offset:], 0).match_info
 
 @dec_cmd
 def cmd_regexp_flags():
