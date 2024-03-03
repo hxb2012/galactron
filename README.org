@@ -1065,6 +1065,48 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   (add-hook 'nov-mode-hook 'visual-line-mode))
 #+END_SRC
 
+*** [[elisp:(customize-group 'galactron-ssp)][SSP]] (请先[[elisp:(package-install 'ssp)][安装ssp]])
+:PROPERTIES:
+:header-args:emacs-lisp: :lexical yes :tangle galactron-ssp.el
+:VISIBILITY: children
+:END:
+
+#+BEGIN_SRC emacs-lisp :noweb yes :comments no
+<<module-header(name="ssp",desc="修改SSP设置")>>
+#+END_SRC
+
+**** [[help:galactron-ssp-enabled-player][设置播放器]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-ssp-enabled-player 'mpv
+  "播放器"
+  :type
+  '(choice
+    (const :tag "MPV" mpv)
+    (const :tag "VLC" vlc)
+    (const :tag "禁用" nil))
+  :tag "Player")
+
+(when galactron-ssp-enabled-player
+  (galactron-default
+   ssp-player
+   (pcase galactron-ssp-enabled-player
+     (`mpv 'ssp-player-mpv)
+     (`vlc 'ssp-player-vlc))))
+#+END_SRC
+
+**** [[help:galactron-ssp-enabled-auto-mode][关联后缀]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-ssp-enabled-auto-mode t
+  "关联后缀"
+  :type 'boolean
+  :tag "Auto mode")
+
+(when galactron-ssp-enabled-auto-mode
+  (add-to-list 'auto-mode-alist '("\\.mp4\\'" . ssp-mode)))
+#+END_SRC
+
 *** [[elisp:(customize-group 'galactron-largefile)][largefile]] (请先[[elisp:(package-install 'largefile)][安装largefile]])
 :PROPERTIES:
 :header-args:emacs-lisp: :lexical yes :tangle galactron-largefile.el
@@ -1139,6 +1181,21 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   (galactron-when-package-installed djvu
     (dolist (item auto-mode-alist)
       (when (eq (cdr item) 'djvu-init-mode)
+        (add-to-list 'largefile-mode-alist item)))))
+#+END_SRC
+
+**** [[help:galactron-largefile-enabled-ssp][SSP]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-largefile-enabled-ssp t
+  "SSP"
+  :type 'boolean
+  :tag "SSP")
+
+(when galactron-largefile-enabled-ssp
+  (galactron-when-package-installed ssp
+    (dolist (item auto-mode-alist)
+      (when (eq (cdr item) 'ssp-mode)
         (add-to-list 'largefile-mode-alist item)))))
 #+END_SRC
 
@@ -1491,6 +1548,52 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
                   (if (galactron-flatpak--executable-find (cdr item))
                       'galactron-flatpak--call-process-a
                     'galactron-flatpak--call-process-toolbox-a)))))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-ssp-mpv][SSP(mpv)调用Flatpak命令]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-ssp-mpv 'smplayer
+  "SSP(mpv)调用Flatpak命令"
+  :type
+  '(choice
+    (const :tag "io.mpv.Mpv" mpv)
+    (conat :tag "io.github.celluloid_player.Celluloid" celluloid)
+    (const :tag "info.smplayer.SMPlayer" smplayer)
+    (const :tag "禁用" nil))
+  :tag "SSP(mpv)")
+
+(when (and galactron-flatpak-enabled-ssp-mpv
+           (equal (getenv "container") "flatpak"))
+  (galactron-when-package-installed ssp
+    (galactron-default
+     ssp-player-mpv-command
+     (list
+      "flatpak-spawn" "--host" "--watch-bus" "--"
+      "flatpak" "run" "-p" "--socket=x11" "--nosocket=wayland"
+      "--filesystem=/tmp" "--command=mpv"
+      (pcase galactron-flatpak-enabled-ssp-mpv
+        (`mpv "io.mpv.Mpv")
+        (`celluloid "io.github.celluloid_player.Celluloid")
+        (`smplayer "info.smplayer.SMPlayer"))))))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-ssp-vlc][SSP(vlc)调用Flatpak命令]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-ssp-vlc t
+  "SSP(vlc)调用Flatpak命令"
+  :type 'boolean
+  :tag "SSP(vlc)")
+
+(when (and galactron-flatpak-enabled-ssp-vlc
+           (equal (getenv "container") "flatpak"))
+  (galactron-when-package-installed ssp
+    (galactron-default
+     ssp-player-vlc-command
+     '("flatpak-spawn" "--host" "--watch-bus" "--"
+       "flatpak" "run" "-p" "--socket=x11" "--nosocket=wayland"
+       "org.videolan.VLC"))))
 #+END_SRC
 
 ** [[elisp:(customize-group 'galactron-capture)][Org Capture]]
@@ -2230,6 +2333,10 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   (galactron-with-package-installed nov
     (galactron-load-file "galactron-nov")))
 
+(when galactron-group-enabled-ssp
+  (galactron-with-package-installed ssp
+    (galactron-load-file "galactron-ssp")))
+
 (when galactron-group-enabled-largefile
   (galactron-with-package-installed largefile
     (galactron-load-file "galactron-largefile")))
@@ -2382,6 +2489,10 @@ Emacs启动时，最后会在[[help:frame-notice-user-settings][frame-notice-use
 
 #+BEGIN_SRC emacs-lisp :tangle galactron-nov.el
 <<footer(name="galactron-nov")>>
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :tangle galactron-ssp.el
+<<footer(name="galactron-ssp")>>
 #+END_SRC
 
 #+BEGIN_SRC emacs-lisp :tangle galactron-largefile.el
