@@ -814,6 +814,78 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
           :store #'org-eww-store-link))))))
 #+END_SRC
 
+**** [[help:galactron-org-enabled-autoload-org-babel][设置Org babel函数自动加载]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-org-enabled-autoload-org-babel t
+  "设置Org babel函数自动加载"
+  :type 'boolean
+  :tag "Autoload org babel")
+
+(when galactron-org-enabled-autoload-org-babel
+  (pcase-dolist
+      (`(,lang . ,module)
+       '(
+         ("C" . "C")
+         ("C++" . "C")
+         ("D" . "C")
+         ("R" . "R")
+         ("ash" . "shell")
+         ("awk" . "awk")
+         ("bash" . "shell")
+         ("calc" . "calc")
+         ("clojure" . "clojure")
+         ("clojurescript" . "clojure")
+         ("cpp" . "C")
+         ("csh" . "shell")
+         ("css" . "css")
+         ("dash" . "shell")
+         ("ditaa" . "ditaa")
+         ("dot" . "dot")
+         ("elisp" . "emacs-lisp")
+         ("emacs-lisp" . "emacs-lisp")
+         ("eshell" . "eshell")
+         ("fish" . "shell")
+         ("forth" . "forth")
+         ("fortran" . "fortran")
+         ("gnuplot" . "gnuplot")
+         ("groovy" . "groovy")
+         ("haskell" . "haskell")
+         ("java" . "java")
+         ("js" . "js")
+         ("julia" . "julia")
+         ("ksh" . "shell")
+         ("latex" . "latex")
+         ("lilypond" . "lilypond")
+         ("lisp" . "lisp")
+         ("lua" . "lua")
+         ("makefile" . "makefile")
+         ("matlab" . "matlab")
+         ("maxima" . "maxima")
+         ("mksh" . "mksh")
+         ("ocaml" . "ocaml")
+         ("octave" . "octave")
+         ("org" . "org")
+         ("perl" . "perl")
+         ("plantuml" . "plantuml")
+         ("posh" . "shell")
+         ("processing" . "processing")
+         ("python" . "python")
+         ("ruby" . "ruby")
+         ("sass" . "sass")
+         ("scheme" . "scheme")
+         ("screen" . "screen")
+         ("sed" . "sed")
+         ("sh" . "shell")
+         ("shell" . "shell")
+         ("sql" . "sql")
+         ("sqlite" . "sqlite")
+         ("zsh" . "shell")))
+    (autoload
+      (intern (format "org-babel-execute:%s" lang))
+      (format "ob-%s" module))))
+#+END_SRC
+
 **** [[help:galactron-org-enabled-refile-outline-path][refile路径提示]]
 
 #+BEGIN_SRC emacs-lisp
