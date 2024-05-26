@@ -425,6 +425,44 @@ Emacs 29参考[[https://emacs.stackexchange.com/a/78370][What to use instead of 
     (add-hook hook 'galactron-display--enable-imenu-h)))
 #+END_SRC
 
+**** [[help:galactron-display-enabled-appt][Appointments]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-display-enabled-appt t
+  "Appointments"
+  :type 'boolean
+  :tag "Appointments")
+
+(defvar galactron-display--appt-notification-id nil)
+
+(defun galactron-display--appt-delete ()
+  (require 'notifications)
+  (when galactron-display--appt-notification-id
+    (notifications-close-notification
+     galactron-display--appt-notification-id)))
+
+(defun galactron-display--appt-disp (min-to-app new-time appt-msg)
+  (require 'notifications)
+  (let ((title
+         (and (string-match "[0-9:\-]+\s+\\([^:]+\\)" appt-msg)
+              (match-string 1 appt-msg))))
+    (setq galactron-display--appt-notification-id
+          (notifications-notify
+           :title title
+           :body appt-msg
+           :replace-id galactron-display--appt-notification-id
+           :timeout (* 60000 (string-to-number min-to-app))))))
+
+(when galactron-display-enabled-appt
+  (galactron-default appt-display-diary nil)
+  (galactron-default appt-display-mode-line nil)
+  (galactron-default appt-disp-window-function
+                     'galactron-display--appt-disp)
+  (galactron-default appt-delete-window-function
+                     'galactron-display--appt-delete)
+  (add-hook 'window-setup-hook #'appt-activate))
+#+END_SRC
+
 **** [[help:galactron-display-enabled-shortcut-menu][快捷菜单]]
 :PROPERTIES:
 :header-args:emacs-lisp: :lexical yes :tangle galactron-shortcut.el
@@ -1457,6 +1495,24 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
                          "toolbox" "run" "--"
                          program args))))
       (apply fun args))))
+#+END_SRC
+
+**** [[help:galactron-flatpak-enabled-notifications][桌面通知]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-flatpak-enabled-notifications t
+  "Flatpak Notifications"
+  :type 'boolean
+  :tag "Flatpak Notifications")
+
+(when (and galactron-flatpak-enabled-notifications
+           (equal (getenv "container") "flatpak"))
+  (with-eval-after-load 'notifications
+    (defconst notifications-application-icon
+      (expand-file-name
+       "../../icons/hicolor/scalable/apps/org.gnu.emacs.svg"
+       (getenv "GIO_LAUNCHED_DESKTOP_FILE")))
+    (defconst notifications-application-name (getenv "FLATPAK_ID"))))
 #+END_SRC
 
 **** [[help:galactron-flatpak-enabled-tramp][Flatpak Tramp]] (请先[[elisp:(package-install 'flakpak-tramp)][安装flatpak-tramp]])
