@@ -1869,6 +1869,36 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
     (keymap-global-set "C-x M-d" 'galactron-agenda-dashboard)))
 #+END_SRC
 
+*** [[help:galactron-agenda-enabled-diary][日程表]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-agenda-enabled-diary t
+  "Diary"
+  :type 'boolean
+  :tag "Diary")
+
+(defun galactron-agenda-diary ()
+  (interactive)
+  (let ((org-agenda-window-setup 'current-window))
+    (org-agenda nil "a")))
+
+(when galactron-agenda-enabled-diary
+  (with-eval-after-load 'org-agenda
+    (galactron-default-assoc
+     org-agenda-custom-commands
+     "a"
+     '("日程表"
+       ((agenda*
+         ""
+         ((org-agenda-span 'day)
+          (org-agenda-include-diary t)))))))
+
+  (galactron-shortcut-add-item
+   "<agenda-agenda>" "日程表"
+   'galactron-agenda-diary
+   :help "日程表"))
+#+END_SRC
+
 ** [[elisp:(customize-group 'galactron-orb)][Org-Mode SQLite缓存]] (请先[[elisp:(package-install 'orb)][安装orb]])
 :PROPERTIES:
 :header-args:emacs-lisp: :lexical yes :tangle galactron-orb.el
@@ -2069,6 +2099,35 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
     (galactron-default-member
      galactron-accessories-sticker-functions
      'galactron-accessories--sticker--remember)))
+#+END_SRC
+
+**** [[help:galactron-accessories-enabled-sticker-diary][日程表]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-accessories-enabled-sticker-diary t
+  "日程表 便利贴"
+  :type 'boolean
+  :tag "Diary Sticker")
+
+(defcustom galactron-accessories-sticker-diary-buffer-name
+  "*Org Diary*"
+  "Diary buffer name"
+  :type 'string
+  :tag "Diary buffer name")
+
+(defun galactron-accessories--sticker--diary ()
+  (let ((org-agenda-buffer-name
+         galactron-accessories-sticker-diary-buffer-name))
+    (galactron-agenda-diary))
+  (goto-char (point-min))
+  (when (text-property-search-forward 'face 'org-agenda-current-time)
+    (recenter)))
+
+(when galactron-accessories-enabled-sticker-diary
+  (when galactron-agenda-enabled-diary
+    (galactron-default-member
+     galactron-accessories-sticker-functions
+     'galactron-accessories--sticker--diary)))
 #+END_SRC
 
 **** [[help:galactron-accessories-enabled-sticker-dashboard][Dashboard]]
