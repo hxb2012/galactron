@@ -2064,6 +2064,19 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
     (orb-capture-db-mode t)))
 #+END_SRC
 
+*** [[help:galactron-orb-enabled-archive][Archive增强]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-archive t
+  "Archive增强"
+  :type 'boolean
+  :tag "Orb Archive")
+
+(when galactron-orb-enabled-archive
+  (galactron-with-package-installed orb
+    (galactron-default org-archive-default-command 'orb-archive)))
+#+END_SRC
+
 ** [[elisp:(customize-group 'galactron-accessories)][Bells and Whistles]]
 :PROPERTIES:
 :header-args:emacs-lisp: :lexical yes :tangle galactron-accessories.el
