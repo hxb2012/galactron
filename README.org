@@ -1815,7 +1815,8 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
 
 (defun galactron-agenda-dashboard ()
   (interactive)
-  (org-agenda nil "d"))
+  (let ((org-agenda-window-setup 'current-window))
+    (org-agenda nil "d")))
 
 (when galactron-agenda-enabled-dashboard
   (galactron-with-package-installed org-super-agenda
@@ -2020,8 +2021,6 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   :type 'boolean
   :tag "Sticker")
 
-(defvar galactron-accessories--sticker-windows nil)
-
 (defcustom galactron-accessories-sticker-functions nil
   "返回Sticker Buffer"
   :type '(repeat function)
@@ -2029,21 +2028,21 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
 
 (defun galactron-accessories-sticker-toggle (&optional arg)
   (interactive "P")
-  (let ((valid-windows
-         (seq-filter 'window-valid-p
-                     galactron-accessories--sticker-windows)))
-    (when valid-windows
-      (dolist (window valid-windows)
-        (quit-window t window)))
-    (when (or arg
-              (not valid-windows))
-      (setq galactron-accessories--sticker-windows
-            (seq-map-indexed
-             (lambda (f i)
+  (when galactron-accessories-sticker-functions
+    (let ((has-side-window (window-with-parameter 'window-side nil)))
+      (when has-side-window
+        (window-toggle-side-windows))
+      (when (or arg (not has-side-window))
+        (seq-map-indexed
+         (lambda (f i)
+           (with-selected-window
                (display-buffer-in-side-window
-                (funcall f)
-                `((side . top) (slot . ,i))))
-             galactron-accessories-sticker-functions)))))
+                (get-scratch-buffer-create)
+                `((side . top) (slot . ,i) (dedicated . t)))
+             (with-window-non-dedicated nil
+               (funcall f))
+             (selected-window)))
+         galactron-accessories-sticker-functions)))))
 
 (defun galactron-accessories--sticker-show ()
   (galactron-accessories-sticker-toggle t))
@@ -2052,6 +2051,56 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   (add-hook 'galactron-accessories-reminder-hook
             'galactron-accessories--sticker-show)
   (keymap-global-set "C-`" 'galactron-accessories-sticker-toggle))
+#+END_SRC
+
+**** [[help:galactron-accessories-enabled-sticker-remember][Remember]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-accessories-enabled-sticker-remember t
+  "Remember便利贴"
+  :type 'boolean
+  :tag "Remember Sticker")
+
+(defun galactron-accessories--sticker--remember ()
+  (remember-notes t))
+
+(when galactron-accessories-enabled-sticker-remember
+  (when galactron-org-enabled-remember
+    (galactron-default-member
+     galactron-accessories-sticker-functions
+     'galactron-accessories--sticker--remember)))
+#+END_SRC
+
+**** [[help:galactron-accessories-enabled-sticker-dashboard][Dashboard]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-accessories-enabled-sticker-dashboard t
+  "Dashboard便利贴"
+  :type 'boolean
+  :tag "Dashboard Sticker")
+
+(defcustom galactron-accessories-sticker-dashboard-buffer-name
+  "*Org Dashboard*"
+  "Dashboard buffer name"
+  :type 'string
+  :tag "Dashboard buffer name")
+
+(defun galactron-accessories--sticker--dashboard ()
+  (let ((org-agenda-buffer-name
+         galactron-accessories-sticker-dashboard-buffer-name))
+    (galactron-agenda-dashboard))
+  (when (org-clocking-p)
+    (unless (eq org-agenda-show-log 'clockcheck)
+      (save-excursion
+        (goto-char (point-min))
+        (org-agenda-update-agenda-type)
+        (org-agenda-log-mode 'clockcheck)))))
+
+(when galactron-accessories-enabled-sticker-dashboard
+  (when galactron-agenda-enabled-dashboard
+    (galactron-default-member
+     galactron-accessories-sticker-functions
+     'galactron-accessories--sticker--dashboard)))
 #+END_SRC
 
 * 深入Galactron
