@@ -2021,7 +2021,9 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
 
 (when galactron-orb-enabled-id-mode
   (with-eval-after-load 'org
-    (orb-id-mode t)))
+    (orb-id-mode t)
+    (keymap-set org-mode-map "C-c i i" 'orb-id-insert)
+    (keymap-set org-mode-map "C-c i t" 'orb-tag-insert)))
 #+END_SRC
 
 *** [[help:galactron-orb-enabled-agenda][从缓存查询Agenda]]
