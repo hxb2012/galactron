@@ -2051,6 +2051,25 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
       (orb-sidebar-db-mode t))))
 #+END_SRC
 
+*** [[help:galactron-orb-enabled-noter-capture][Noter自动收录文件]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-orb-enabled-noter-capture t
+  "Noter自动收录文件"
+  :type 'boolean
+  :tag "Orb Noter Capture")
+
+(when galactron-orb-enabled-noter-capture
+  (advice-add 'orb-capture-noter :override 'orb-capture-asset)
+  (with-eval-after-load 'orb-noter
+    (galactron-default-member
+     orb-noter--find-doc-node-functions
+     'orb-asset-noter--find-doc-node)
+    (galactron-default-member
+     orb-noter--find-doc-buffer-functions
+     'orb-asset-noter--find-doc-buffer)))
+#+END_SRC
+
 *** [[help:galactron-orb-enabled-capture][Capture增强]]
 
 #+BEGIN_SRC emacs-lisp
