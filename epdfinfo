@@ -640,7 +640,7 @@ def cmd_regexp_flags():
 
 
 def format_date(dt):
-    return datetime.fromtimestamp(dt.to_unix()).strftime("%c")
+    return "" if dt is None else datetime.fromtimestamp(dt.to_unix()).strftime("%c")
     # return "" if dt is None else str(datetime.fromtimestamp(dt.to_unix(), timezone(timedelta(microseconds=dt.get_utc_offset()))))
 
 @dec_cmd

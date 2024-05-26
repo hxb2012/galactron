@@ -627,7 +627,7 @@ def cmd_regexp_flags():
 
 
 def format_date(dt):
-    return datetime.fromtimestamp(dt).strftime("%c")
+    return "" if dt is None else datetime.fromtimestamp(dt).strftime("%c")
 
 @dec_cmd
 def cmd_metadata(doc: arg_doc):
