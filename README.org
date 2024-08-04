@@ -636,6 +636,18 @@ Emacs默认选中一个区域后，输入并不会覆盖内容
                            'fullscreen 'maximized))
 #+END_SRC
 
+**** [[help:galactron-frame-enabled-window-auto-balance][自动等分Window]]
+
+#+BEGIN_SRC emacs-lisp
+(defcustom galactron-frame-enabled-window-auto-balance t
+  "最大化"
+  :type 'boolean
+  :tag "Window auto balance")
+
+(when galactron-frame-enabled-window-auto-balance
+  (galactron-default window-combination-resize t))
+#+END_SRC
+
 **** [[help:galactron-frame-enabled-minibuffer-at-top][把minibuffer放到顶部]]
 
 #+BEGIN_SRC emacs-lisp
