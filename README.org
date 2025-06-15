@@ -236,7 +236,7 @@ javascript:location.href='org-protocol://capture?'+new URLSearchParams({url:loca
    package-archives
    "melpa"
    (pcase galactron-package-enabled-melpa
-     ('tuna "http://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")
+     ('tuna "https://mirrors.tuna.tsinghua.edu.cn/elpa/melpa/")
      ('sjtug "https://mirrors.sjtug.sjtu.edu.cn/emacs-elpa/melpa/")
      (_ "https://melpa.org/packages/"))))
 #+END_SRC
@@ -1882,7 +1882,6 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   :tag "Dashboard")
 
 (defun galactron-agenda-dashboard ()
-  (interactive)
   (let ((org-agenda-window-setup 'current-window))
     (org-agenda nil "d")))
 
@@ -1946,7 +1945,6 @@ Org-Mode暗藏启动速度杀手，能少一点是一点
   :tag "Diary")
 
 (defun galactron-agenda-diary ()
-  (interactive)
   (let ((org-agenda-window-setup 'current-window))
     (org-agenda nil "a")))
 
